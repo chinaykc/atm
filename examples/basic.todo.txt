@@ -1,0 +1,7 @@
+Run the project's normal validation command and fix any failures.
+
+/resume
+Continue the previous Codex session and finish the current change.
+
+/for 2
+Review the final diff for correctness, then make any required cleanup edits.

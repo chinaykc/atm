@@ -1,0 +1,40 @@
+# Build outputs
+/atm
+/atm.exe
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+/build/
+
+# Test and coverage artifacts
+coverage.out
+coverage.*
+*.coverprofile
+
+# ATM run artifacts
+.atm/
+**/.atm/
+
+# Local tool state
+.agents/
+.codex/
+.playwright-mcp/
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example

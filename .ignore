@@ -1,0 +1,13 @@
+.atm/
+**/.atm/
+.agents/
+.codex/
+.git/
+.idea/
+.playwright-mcp/
+atm
+atm.exe
+*.test
+coverage.out
+coverage.*
+*.coverprofile
