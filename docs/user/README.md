@@ -1,8 +1,8 @@
 # ATM 用户手册
 
-ATM 是 **Agent Task Markdown**：一种基于 Markdown 的 Agent 任务调度 DSL（领域专用语言）。普通 Markdown 用来承载背景、计划和说明，斜杠 heading 与斜杠命令用来声明可执行任务、循环、并行、条件、结构化输出和复用定义。
+ATM 是 **Agent Task Markdown**：一种基于 Markdown 的 Agent 任务调度 DSL（领域专用语言）。普通 Markdown 用来承载背景、计划和说明，`/task`、task header 命令与斜杠控制命令用来声明可执行任务、循环、并行、条件、结构化输出和复用定义。
 
-这是一份面向日常使用者的 ATM 手册。它从第一个 `todo.txt` 开始，逐步介绍任务边界、并行、循环、结构化输出、可复用定义、数据库黑板、产物追踪，最后给出命令和 CLI 参考。
+这是一份面向日常使用者的 ATM 手册。它从第一个 `todo.txt` 开始，逐步介绍任务边界、并行、循环、结构化输出、可复用定义、数据库黑板、产物追踪和发布协作 runbook，最后给出命令和 CLI 参考。
 
 ## 目录
 
@@ -34,11 +34,11 @@ flowchart LR
 
 | 概念 | 你需要记住的规则 |
 | --- | --- |
-| 任务块 | 一段 prompt，或 Markdown slash heading section |
+| 任务块 | `/task`、任务启动控制命令，或带 prompt 的 task header 命令开始的一段 prompt |
 | 命令 | 写在任务开头，影响这个任务怎么执行 |
 | `/go` | 后台启动任务，继续扫描后续任务 |
 | `/wait` | 等待此前启动的后台任务 |
-| `/for` | 循环、重试或按文件/目录/列表逐项执行 |
+| `/for` | 循环、重试，或通过 `files()` / `dirs()` / 列表逐项执行 |
 | `/output` | 保存文本结果或结构化 JSON |
 | `/db` | 给 agent 暴露本地 JSON 数据库，作为记忆或黑板 |
 | `/def` + `/call` | 定义可复用任务模板，并在需要时调用 |

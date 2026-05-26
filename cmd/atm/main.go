@@ -1,14 +1,14 @@
 package main
 
 import (
-	"atm/pkg/cli"
 	"fmt"
+	"github.com/chinaykc/atm"
 	"os"
 )
 
 func main() {
-	if err := cli.Run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	if err := atm.RunCLI(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(atm.ExitCode(err))
 	}
 }

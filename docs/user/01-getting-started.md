@@ -59,6 +59,14 @@ go build -buildvcs=false -o atm ./cmd/atm
 ./atm -file todo.txt
 ```
 
+`run` 是 live/rescan 模式：只要当前执行还没有结束，ATM 会继续重扫活跃 todo 文件，所以运行中追加的新 task block 可能被同一次执行拾取。需要固定启动时看到的任务集合时，用 `exec`：
+
+```sh
+./atm exec todo.txt
+```
+
+`run` 和 `exec` 的区别只在任务集合策略：`run` 持续重扫活跃文档，`exec` 固定启动瞬间看到的 task block 快照。二者使用同一套执行器、工具参数、输出目录、状态文件、报告文件和锁机制。`exec` 启动后追加的任务会留给下一次 `run` 或 `exec`。
+
 没有传文件时，ATM 会依次查找：
 
 1. `todo.txt`
@@ -108,7 +116,7 @@ sequenceDiagram
 
 ```txt
 task 2:
-  flow: For(N in [1 2 3]) -> Execute
+  flow: For(n in [0 1 2]) -> Execute
   prompt: 继续修复，直到测试通过。
 ```
 
@@ -118,9 +126,10 @@ task 2:
 
 ```txt
 .atm/20260521103000/
-  task-001-....log
   task-001-run-001-codex.jsonl
   result.md
+.atm/logs/
+  task-001-....log
 ```
 
 手动指定目录：

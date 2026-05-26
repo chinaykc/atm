@@ -1,9 +1,0 @@
-/go
-Review the command documentation for missing edge cases.
-
-/go
-Inspect tests for uncovered parser behavior.
-
-/wait
-
-Apply the smallest cleanup needed after the parallel review tasks finish.

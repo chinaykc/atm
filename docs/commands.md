@@ -2,7 +2,7 @@
 
 [中文](commands.zh-CN.md)
 
-ATM means **Agent Task Markdown**. It is a Markdown-based DSL (domain-specific language) for scheduling agent tasks: normal Markdown carries context and notes, while slash-heading sections and slash commands define executable work.
+ATM means **Agent Task Markdown**. It is a Markdown-based DSL (domain-specific language) for scheduling agent tasks: normal Markdown carries context and notes, while `/task` and slash control commands define executable work.
 
 Most todo files only need plain prompts. Add command lines when you want a task to resume, pass tool arguments, run a flow more than once, stop on a condition, or run in the background.
 
@@ -10,7 +10,7 @@ Commands must appear at the start of a task block, before the prompt text.
 
 ## Task Boundaries
 
-ATM has two parsing modes.
+ATM has two task boundary styles.
 
 In legacy mode, a task is a text block:
 
@@ -35,36 +35,57 @@ Blank lines separate tasks; any number of blank or whitespace-only lines is acce
 
 Standalone Markdown rule lines made only of three or more `-` or `=` characters are also ignored. Inline comments are not supported. A `#`, `---`, or `<!-- ... -->` later in a prompt line remains prompt text.
 
-In Markdown task mode, headings whose title starts with `/` define runnable sections:
+In Markdown task documents, headings define context and scope. They do not start tasks by themselves. A task starts with `/task`, a task-start control command, or task header commands followed by prompt text:
 
 ```md
 # Context
 
 This ordinary Markdown is documentation and is not executed.
 
-## //verify
+## Verify
 
+/for 2
 Run go test ./... and fix failures.
 
+/task
 Run go vet ./... and fix actionable findings.
 
-## /discuss
+## Discuss
 
-This whole section is one prompt.
-
-Blank lines stay inside the prompt.
+/task
+This task sees the Discuss heading as context.
 
 ## Notes
 
 This section is documentation again.
 ```
 
-If a file contains at least one slash heading (`#{1,6} /...` or `#{1,6} //...`), only slash-heading sections are parsed as runnable content. A runnable section ends at the next heading with the same or higher level.
+Ordinary Markdown before a task is preserved and passed as section context. A task continues until the next root-level task-start/control command after a blank line, the next same-or-higher heading, a report block, or the end of the document. Header-only blocks such as standalone `/let` declarations are scoped declarations when they have no prompt; the same `/let` line followed by prompt text is the current task's header. Deeper headings remain part of the task prompt.
 
-- `# /name`: single-task section. The whole section body is one task prompt, and blank lines remain part of the prompt.
-- `# //name`: task-list section. The section body uses legacy block rules, so blank lines split multiple tasks.
+If a deeper heading contains its own task-start command, ATM treats that command as a child-heading task. The child-heading task inherits the parent task's root prompt plus the ordinary Markdown in its own heading path. It does not inherit sibling child-heading text or sibling tasks:
 
-In a single-task `# /name` section, lower-level Markdown headings remain part of the prompt. In a task-list `# //name` section, the legacy comment and blank-line rules apply to each task block.
+```md
+# Review
+
+/task
+Review backend.
+
+### Scope 1
+
+API and migrations.
+
+/for 2
+Fix tests {{n}}.
+
+### Scope 2
+
+Docs.
+
+/task
+Fix docs.
+```
+
+The Scope 1 task sees `Review backend.`, `Scope 1`, and `API and migrations.`. The Scope 2 task sees `Review backend.`, `Scope 2`, and `Docs.`. Child-heading tasks also inherit `/let` bindings from the parent task header, including lazy providers; a `/let` in the child section can shadow the inherited value. ATM runs pending child-heading tasks before the parent task. When the parent task finally runs, its prompt includes the completed child tasks' visible `> [!ATM]` report summaries under a `Completed child task reports` section. Skipped child tasks are not embedded.
 
 Commands can be normalized with:
 
@@ -72,7 +93,7 @@ Commands can be normalized with:
 atm format -file todo.txt
 ```
 
-Commands are only recognized before prompt text starts. A slash command written later in the prompt is treated as normal prompt content.
+Commands are only recognized before prompt text starts. A slash command written later in the prompt is an error unless it is a root-level sibling task after a blank line.
 
 ## Commands
 
@@ -124,11 +145,13 @@ Use `--must-exist` when the task should fail instead of creating a missing direc
 Run the backend checks.
 ```
 
-The path is rendered with task variables, then resolved relative to the current task workdir or the original todo file directory. The resolved path must stay inside the original todo file directory. `/cd` affects Codex/Claude, `/bash`, `/let ... /bash`, natural-language `until` checks, and local CEL file functions. It does not change where ATM writes result blocks, output artifacts, or DB files.
+The path is rendered with task variables, then resolved relative to the current task workdir or the original todo file directory. The resolved path must stay inside the original todo file directory. `/cd` affects Codex/Claude, `/bash`, `/let ... /bash`, natural-language `until` checks, and local expression file functions. It does not change where ATM writes result blocks, output artifacts, or DB files.
 
 ### `/let name value`
 
-Define a template variable. A standalone block containing only `/let` commands defines globals for later task blocks. Unused `/let` bindings are allowed, though comments are clearer for temporarily bypassing a task.
+Define a template variable. A standalone block containing only `/let` commands defines variables for later task blocks in the current Markdown scope. Root-level `/let` bindings are visible to later tasks in the whole document; heading-level `/let` bindings are visible only to later tasks in that heading and its child headings. Sibling headings do not inherit them, and `/let` is not hoisted before its declaration. Unused `/let` bindings are allowed, though comments are clearer for temporarily bypassing a task.
+
+Inside a task header, `/let` is local to that task block and its child-heading tasks. Lazy task-header providers inherited by a child task are resolved in the child task invocation and do not share cache with the parent. A child section `/let` with the same name shadows the parent task header value.
 
 ```txt
 /let suite go test ./...
@@ -137,15 +160,21 @@ Define a template variable. A standalone block containing only `/let` commands d
 Run {{suite}} and fix failures.
 ```
 
-Inside a task block, `/let` defines local variables. A slash command matching a variable name inserts that value before the prompt:
+Inside a task block, `/let` defines local variables. Render variables in prompt text with `{{name}}`:
 
 ```txt
 /let context Read README.md first.
-/context
-Review the setup instructions.
+Review the setup instructions with this context:
+{{context}}
 ```
 
-`/let` can also capture bash stdout. Trailing newlines are removed before the value is rendered:
+In Markdown task documents, `/context #Heading` is a separate task header command for adding ordinary documentation from another section to the task context. It does not render a variable named `context`.
+
+`/let` can also capture bash stdout. `/let name /bash ...` and `/let name /call ...` are lazy providers: ATM records the provider in the task header, does not run it during `atm plan` or `atm check`, and executes it only when the variable is actually rendered or read by an expression. The first read in the same task invocation caches the value, so repeated `{{name}}` references reuse one result. To execute a definition or shell command multiple times, use separate bindings or a direct `/call` or `/bash` command.
+
+Because lazy providers are render-time dependencies, `atm check` and static `atm plan` report them as warnings instead of executing them. Lazy bash providers are marked as possible side-effect points; lazy call providers are marked as definition dependencies. In the plan flow, they appear as `LazyBash(name)` or `LazyCall(def -> name)`.
+
+Trailing newlines are removed before a bash value is rendered:
 
 ```txt
 /let branch /bash git branch --show-current
@@ -159,19 +188,19 @@ ATM renders prompts, `/bash` scripts, `until` conditions, `/args` values, and `/
 Existing variable placeholders remain supported:
 
 ```txt
-Review {{path}} on pass {{N}}.
+Review {{file}} on pass {{n}}.
 ```
 
 That legacy form is equivalent to:
 
 ```gotemplate
-Review {{var "path"}} on pass {{var "N"}}.
+Review {{var "file"}} on pass {{var "n"}}.
 ```
 
 Template data contains every current variable as a top-level key when the name is a valid Go template identifier, plus `.Vars` for map access:
 
 ```gotemplate
-{{if .N}}Pass {{.N}}{{end}}
+{{if .n}}Pass {{.n}}{{end}}
 {{index .Vars "path"}}
 {{var "path"}}
 {{has "path"}}
@@ -185,7 +214,7 @@ ATM provides different template values in different render contexts.
 
 | Context | Values |
 | --- | --- |
-| Normal prompts, `/bash`, `/args`, `/cd`, `until`, `/return`, and `/output` schemas | User variables from `/let`, `/let ... /call`, `/for` loop variables, and definition parameters. |
+| Normal prompts, `/bash`, `/args`, `/cd`, `until`, `/return`, and `/output` schemas | User variables from `/let`, lazy `/let ... /bash` and `/let ... /call` providers once read, `/for` loop variables, and definition parameters. |
 | `/return` only | `{{agent.message}}`, `{{agent.last_message}}`, `{{agent.messages}}`, and `{{agent.messages_json}}` for the current definition call. |
 | `/output` file names in background branches | `{{agent_index}}`, `{{agent}}`, and `{{agent_label}}`, plus normal variables. |
 
@@ -199,24 +228,24 @@ Use this reviewer note:
 
 ### `/output [file]`
 
-Save the task result into the run output directory. `/output` applies to the nearest current task block, may appear anywhere inside that block, and can appear at most once in that block. It can be written before or after `/for`, `/go`, `/wait`, `/bash`, or the prompt text.
+Save the task result into the run output directory. `/output` is a task header command: write it before prompt text begins, after any control/header commands it should belong to. A task block can contain at most one `/output`; writing `/output` inside the prompt body is an error.
 
 Without a fenced schema block, `/output` saves the latest assistant message as text:
 
 ```txt
-Summarize the release risk in one operator-readable note.
-
 /output release-note
+
+Summarize the release risk in one operator-readable note.
 ```
 
 With a fenced schema block, `/output` requires structured JSON through a temporary MCP tool. The optional same-line file name chooses where ATM saves the reported JSON inside the run output directory; `name` and `name.json` both save as `name.json`. If omitted, ATM creates a time-based JSON file name and reports it in the task log.
 
-ATM follows Markdown fence length rules, so ```` can wrap schema text that contains ``` inside it. ATM accepts plain fences, `json`, `yaml`, and `yml` fences:
+ATM follows Markdown fence length rules, so ```` can wrap schema text that contains ``` inside it. Schema fences must use backticks, not tildes. ATM accepts plain fences, `schema`, `json`, `yaml`, and `yml` fences:
 
 ````txt
-Explain whether the release is ready.
-
 /output summary.json
+
+Explain whether the release is ready.
 ```json
 {
   "type": "object",
@@ -232,9 +261,9 @@ Explain whether the release is ready.
 YAML fences use the same JSON Schema shape, written as YAML:
 
 ````txt
-Report the current weather.
-
 /output
+
+Report the current weather.
 ```yaml
 type: object
 required:
@@ -246,12 +275,12 @@ properties:
 ```
 ````
 
-Plain fences can also use a compact field list. Each non-empty line is `name:type:description`; `type` is optional and defaults to `string`, so `weather:Weather state` and `weather::Weather state` are both valid:
+Plain fences and `schema` fences can also use a compact field list. Each non-empty line is `name:type:description`; `type` is optional and defaults to `string`, so `weather:Weather state` and `weather::Weather state` are both valid:
 
 ````txt
-Return the release gate result.
-
 /output result
+
+Return the release gate result.
 ```
 reason:string:Detailed reason
 weather:Weather state
@@ -261,11 +290,11 @@ passed:boolean:Whether the release gate passed
 
 For Codex and Claude, ATM attaches a temporary MCP server exposing `atm_report_output`. The tool's input schema is built from the `/output` schema block, so the agent reports structured data by calling that tool. If the tool is not called, the task fails instead of being marked done.
 
-File names are rendered with the same template context as prompts. Loop variables such as `{{N}}`, `{{area}}`, `{{dir}}`, and `{{path}}` are available. Background branches also expose `{{agent_index}}`, `{{agent}}` (file-safe), and `{{agent_label}}` (human-readable). When `/output` runs inside a `/go` branch, ATM automatically appends a branch suffix to the file name to avoid collisions.
+File names are rendered with the same template context as prompts. Loop variables such as `{{n}}`, `{{area}}`, `{{dir}}`, and `{{file}}` are available. Background branches also expose `{{agent_index}}`, `{{agent}}` (file-safe), and `{{agent_label}}` (human-readable). When `/output` runs inside a `/go` branch, ATM automatically appends a branch suffix to the file name to avoid collisions.
 
 ### `/db`
 
-Declare lightweight task databases for agent memory or blackboard state. A database stores `map[string][]string` and is exposed to Codex and Claude through an MCP server. `/db new` is a standalone global declaration block and does not run an agent:
+Declare lightweight task databases for agent memory or blackboard state. A database stores `map[string][]string` and is exposed to Codex and Claude through an MCP server. `/db new` is a scoped declaration block and does not run an agent:
 
 ```txt
 /db new decisions scope:global persist:project access:write
@@ -283,8 +312,8 @@ Defaults are `scope:global`, `persist:run`, and `access:admin`.
 
 | Option | Meaning |
 | --- | --- |
-| `scope:global` | Visible to later task blocks by default. |
-| `scope:local` | Declared but not mounted unless a task writes `/db use name`. |
+| `scope:global` | Mounted by default for later task blocks where this declaration is visible. |
+| `scope:local` | Declared but not mounted unless a visible task writes `/db use name`. |
 | `persist:run` | Stored under the current run output directory, for example `.atm/20260521103000/db/name.json`. |
 | `persist:project` | Stored under the project directory as `.atm/db/name.json`, so later runs can reuse it. |
 | `access:read` | Read-only maximum access. |
@@ -293,6 +322,8 @@ Defaults are `scope:global`, `persist:run`, and `access:admin`.
 | `access:admin` | Full read/write/delete access. |
 
 The body after `/db new ...` is the usage description. ATM passes it to the DB MCP server, and `atm_db_list` returns it to the agent.
+
+`/db new` follows Markdown lexical scope. A root-level declaration is visible to later tasks in the whole document; a declaration under a heading is visible only to later tasks in that heading and its child headings. Sibling headings do not inherit it, and declarations are not hoisted before their declaration line. The `scope:global` and `scope:local` options only decide default mounting inside that visible declaration set.
 
 Task blocks can adjust their own DB view:
 
@@ -360,22 +391,24 @@ Prepare the release notes.
 
 `/skill use` copies the selected skill directory into the current `/cd` workdir using the layout expected by the selected adapter: `.agents/skills/<name>` for Codex and `.claude/skills/<name>` for Claude. The source path must already exist and contain `SKILL.md`; ATM creates the target adapter directories as needed.
 
+`/skill new` and `/mcp new` are scoped declaration blocks. A root-level declaration is visible to later tasks in the whole document; a declaration under a heading is visible only to later tasks in that heading and its child headings. Sibling headings do not inherit it, and declarations are not hoisted before their declaration line. `/skill use` and `/mcp use` must name a declaration visible from the current task, unless `/skill use` is given a path-like value.
+
 `/mcp use` injects named MCP servers through temporary runner configuration. It does not write `.mcp.json` or persistent Codex config. `/mcp def use name...` exposes selected definitions to the agent as MCP tools named like `atm_def_<name>`, with one string argument per definition parameter. A def invoked this way inherits the task workdir, DBs, skills, and MCPs, but nested def-MCP exposure is disabled by default to avoid recursive agent self-dispatch.
 
-### `/def`, `//def`, `/call`, and `/return`
+### `/def`, `/call`, and `/return`
 
 Define reusable task templates with `/def` and call them with `/call`. Definitions are not run by themselves; they run only at a call site.
 
-In Markdown task mode, `/def` and `//def` mirror the normal `/` and `//` task-heading rules:
+`/def` is a definition block with an explicit `/return` boundary. The definition body can contain ordinary task blocks, and those internal tasks are not added to the outer plan:
 
 ```md
-## /def whereami
+/def whereami
 
 Identify the current city from the repository context or available environment.
 
 /return {{agent.last_message}}
 
-## //def release_reviews area
+/def release_reviews area
 
 /go reviewer
 Review {{area}} implementation risks.
@@ -388,7 +421,11 @@ Review {{area}} documentation risks.
 /return Reviews for {{area}} are complete.
 ```
 
-`/def` treats the whole section as one task template and preserves Markdown paragraph blank lines. `//def` treats the section as a list of task blocks, so each block runs in order when called. In legacy todo files, `/def name [params...]` defines a single task block.
+Definitions must contain exactly one `/return`, and it must be the final definition block. Structured `/output` does not act as a return-value fallback. A `/return` outside a `/def` body is invalid; use ordinary Markdown text if a normal task should mention that word.
+
+Markdown headings inside a `/def` body are treated as prompt text, not definition boundaries. `atm check` warns because headings inside definitions are easy to mistake for outer document structure.
+
+Definitions follow Markdown lexical scope. A root-level `/def` is visible to later tasks in the whole document. A `/def` under a heading is visible only to later tasks in that heading and its child headings; sibling headings do not inherit it. To share a definition across sibling sections, put it before those sections in their common parent or at the document root. Definitions are not hoisted: a task cannot call a definition that appears later in the document.
 
 Call arguments bind to definition parameters by position:
 
@@ -396,33 +433,32 @@ Call arguments bind to definition parameters by position:
 /call release_reviews checkout
 ```
 
-When `/call` is a standalone task block, ATM simply executes the definition and ignores any return value. When `/call` appears as an independent line inside prompt text, ATM executes the definition first, replaces that line with the return text, then runs the surrounding task:
-
-```txt
-Get the weather for
-/call whereami
-today.
-```
-
-`/let name /call ...` executes the definition synchronously and binds its return value for later templates:
+When `/call` is a standalone task/header command, ATM executes the definition and ignores any return value unless it is assigned. Prompt text does not execute slash commands; to use a definition result in prompt text, bind it before the prompt with `/let name /call ...`:
 
 ```txt
 /let city /call whereami
 Get the weather for {{city}}.
 ```
 
-Definitions return values with `/return`. `/return` may be single-line, bash-backed, multiline, or structured:
+Definitions return values with `/return`. `/return` may be single-line, bash-backed, multiline, or structured. Multiline text and multiline bash must use backtick fenced arguments; bare multiline text after `/return` is not valid:
 
-```txt
+````txt
 /return {{city}}
 /return /bash pwd
 
 /return
+```
 City: {{city}}
 Recent message: {{agent.last_message}}
 ```
 
-Structured `/return` uses the same MCP output mechanism as structured `/output`, but the JSON is returned to the caller instead of being primarily used as a file artifact:
+/return /bash
+```
+git branch --show-current
+```
+````
+
+Structured `/return` uses the same MCP output mechanism as structured `/output`, but the JSON is returned to the caller instead of being primarily used as a file artifact. To avoid ambiguity with text returns, structured returns must use an explicit `json`, `yaml`, `yml`, or `schema` fence; an empty fence after `/return` is plain text:
 
 ````txt
 Assess the release gate.
@@ -440,7 +476,7 @@ Assess the release gate.
 ```
 ````
 
-If a definition has both `/return` and `/output`, `/return` has priority as the call return value. If a definition has no `/return` but has structured `/output`, the output JSON becomes the fallback return value. If it has neither, it returns nothing. A call site that needs a value, such as `/let name /call ...` or an inline prompt `/call`, fails when the definition returns nothing.
+Definitions must explicitly write `/return`. If a definition needs to return structured JSON, use structured `/return`; do not rely on structured `/output` as a fallback return value. `/output` is for file artifacts, while `/return` is for values consumed by callers.
 
 Return templates can read recent assistant messages from the current definition call:
 
@@ -451,7 +487,7 @@ Return templates can read recent assistant messages from the current definition 
 
 N is the run's `-messages` value, which defaults to `1`.
 
-Definitions may contain `/pool`, `/go`, and `/wait`. Pools declared inside a definition are local to that call, and all local or named pools still share the global `-jobs` concurrency limit. A definition call waits for its own remaining background branches before it returns.
+Definitions may contain `/pool`, `/go`, and `/wait`. Pools declared inside a definition are local to that call, and all local or named pools still share the global `-jobs` concurrency limit. A definition does not implicitly insert `/wait` before `/return`; write `/wait` when the return value depends on background branches.
 
 Import definitions from another file with `/import`:
 
@@ -460,7 +496,7 @@ Import definitions from another file with `/import`:
 /import weather from workflows/weather.todo.md
 ```
 
-Imports load definitions only; ordinary runnable tasks in imported files are not executed. Paths are relative to the importing todo file. Namespaced imports are called as `weather.lookup`. ATM detects recursive definition calls, including cycles across imported files, and fails at plan/parse time.
+Imports load definitions only; ordinary runnable tasks in imported files are not executed. They also do not import `/db new`, `/skill new`, `/mcp new`, or other resource declarations from the imported file. Paths are relative to the importing todo file. Namespaced imports are called as `weather.lookup`. Imports follow Markdown lexical scope: an import at the document root is visible to later tasks in the whole document, while an import under a heading is visible only to later tasks in that heading and its child headings. Sibling headings do not inherit it, and imports are not hoisted before their declaration. Imported definitions run with the caller's workdir, DB, skill, and MCP view, so callers must declare and enable required resources in the importing document. ATM detects recursive imports and recursive definition calls, including cycles across imported files, and fails at plan/parse time.
 
 ### `/bash script`
 
@@ -494,8 +530,10 @@ Counted loop:
 
 ```txt
 /for 3
-Review the final diff. This is pass {{N}}.
+Review the final diff. This is pass {{n}}.
 ```
+
+Counted loops bind lowercase `n` only. The values are zero-based, so `/for 3` runs with `n = 0`, `n = 1`, and `n = 2`; uppercase `N` is not generated.
 
 Bounded retry with a completion condition:
 
@@ -506,42 +544,60 @@ Fix the failing tests.
 
 After each run, `atm` asks the selected tool to check the `until` condition. For Codex and Claude, `atm` attaches a temporary MCP server that exposes `atm_report_check`, and the agent must report the result through that tool.
 
-Deterministic local retry with CEL:
+Deterministic local retry with expressions:
 
 ```txt
-/for 5 until(exists("result.json") && len(read("result.json")) > 0)
+/for 5 until(exist("result.json") && len(open("result.json")) > 0)
 Generate result.json.
 ```
 
-When `until` is followed by a parenthesized expression, ATM evaluates it locally with CEL instead of asking an agent to judge natural language. The expression must return `bool`. CEL checks are read-only and support `exists(path)`, `read(path)`, `json(path)`, `existsOutput(path)`, `readOutput(path)`, `jsonOutput(path)`, and `len(value)`. Relative paths are resolved under the original todo file directory; `*Output` functions read under the run output directory.
+When `until` is followed by a parenthesized expression, ATM evaluates it locally with the local expression evaluator instead of asking an agent to judge natural language. The expression must return `bool`. Expression checks are read-only and support `exist(path)`, `open(path)`, `outputDir(path)`, `json(text)`, `yaml(text)`, `toml(text)`, `len(value)`, `range(...)`, `files([root])`, `dirs([root])`, `walkFiles([root])`, and `walkDirs([root])`. Relative paths are resolved under the current task workdir; `outputDir(path)` points at the run output directory even after `/cd`.
 
-Unbounded CEL retry is written without a count:
+Unbounded expression retry is written without a count:
 
 ```txt
-/for until(exists("result.json") && json("result.json").passed)
+/for until(exist("result.json") && json(open("result.json")).passed)
 Keep working until result.json reports passed=true.
 ```
 
-This form keeps running until the CEL expression is true or the process is interrupted. It is intentionally separate from natural-language `until`: `/for until tests pass` is invalid. File paths in CEL functions must be quoted, for example `read("result.json")`; `read(result.json)` is parsed as variable access by CEL.
+This form keeps running until the expression is true or the process is interrupted. It is intentionally separate from natural-language `until`: `/for until tests pass` is invalid. File paths in expression functions must be quoted, for example `open("result.json")`; `open(result.json)` is parsed as variable access by the local expression evaluator.
 
 ### `/if` and `/else`
 
-Choose one task block. `/if` must be the first command in its task block. `/else` is optional for inline branches and required for header-only nested branches.
+Choose one task block. `/if` is a task-block control command. `/else` is optional; when it is present, it must immediately follow the then task block. `/if` and `/else` do not nest. Use `/def` to package more complex branch bodies.
 
 ```txt
-/if (exists("gate.json") && json("gate.json").passed)
+/if (exist("gate.json") && json(open("gate.json")).passed)
 Continue the release.
 
 /else
 Write a release blocker summary from gate.json.
 ```
 
-`/if(...)` and `/if (...)` use local CEL, matching `until(...)`. `/if plain language condition` uses the selected tool's structured MCP check, matching natural-language `until`:
+`/if(...)` and `/if (...)` use local expression, matching `until(...)`. `/if plain language condition` uses the selected tool's structured MCP check, matching natural-language `until`:
 
 ```txt
 /if release gate is open
 Continue the release.
 ```
+
+Long natural-language `/if` and `until` conditions can use a fenced text argument immediately after the command:
+
+````txt
+/if
+```
+release gate is open
+and checks are green
+```
+Continue the release.
+
+/for 3 until
+```
+tests pass
+and lint passes
+```
+Fix the failures.
+````
 
 If the condition is true, ATM runs the `/if` branch and marks the `/else` branch skipped. If it is false, ATM marks the `/if` branch skipped and runs the `/else` branch when present. Without `/else`, a false inline `/if` block is only marked skipped. Skipped blocks use the generated state format:
 
@@ -552,32 +608,40 @@ If the condition is true, ATM runs the `/if` branch and marks the `/else` branch
 > reason: if condition evaluated false
 ```
 
-Nested branches use header-only `/if` and `/else` blocks. Because ATM does not use indentation, pairing is structural: each `/else` belongs to the nearest unmatched header-only `/if`; header-only nested `/if` blocks must have a matching `/else`.
+An empty `/else` immediately after its `/if` branch is legal and means false-branch no-op. It is rarely useful; `atm check` warns so the block can usually be removed.
+
+`/if` can also appear inside a control chain. Command order defines the control flow: `/for /if /go`, `/for /go /if`, and `/if /go /for` are different. Multi-line control headers are equivalent to writing the same commands on one line, so prefer the multi-line form when it is easier to read:
 
 ```txt
-/if (exists("gate.json"))
+/for 10
+/if(n % 2 == 0)
+/go
 
-/if (json("gate.json").passed)
+Review even shard {{n}}.
 
-Publish.
-
-/else
-Write the gate failure summary.
-
-/else
-Generate gate.json first.
+/wait
 ```
 
-In this example, the first `/else` belongs to the inner `/if`; the second `/else` belongs to the outer `/if`.
-
-Directory and path loops:
+This filters the loop before dispatching background work. The following `/else` block can still provide a different prompt body for the same conditional task:
 
 ```txt
-/for dir
+/for 3 /if(n == 1)
+Review the selected shard {{n}}.
+
+/else
+Summarize why shard {{n}} is skipped.
+```
+
+If a branch needs several tasks or nested choices, define that workflow with `/def` and call it from the branch.
+
+Directory and file loops:
+
+```txt
+/for dir in dirs()
 Review {{dir}}.
 
-/for path
-Review {{path}}.
+/for file in files()
+Review {{file}}.
 ```
 
 Explicit list loop:
@@ -587,22 +651,29 @@ Explicit list loop:
 Review {{area}}.
 ```
 
-Dynamic CEL list loop:
+Dynamic expression list loop:
 
 ```txt
 /for plan in(/call plan_shards)
 {{plan}}
 ```
 
-`in (...)` and `in(...)` are both accepted. The parenthesized expression is evaluated at runtime. It may be CEL returning a list, or `/call name` returning a list. If `/call` returns an object with a `plans` array, ATM expands that array. Scalar items render with `{{plan}}`; object items can be accessed with fields such as `{{area.name}}`.
+Numeric expression range loop:
 
-The loop variable renders with `{{N}}`, `{{dir}}`, `{{path}}`, `{{area}}`, or fields from a dynamic object item.
+```txt
+/for shard in range(1, 4)
+Review shard {{shard}}.
+```
+
+`in expr`, `in(expr)`, and `in (expr)` are accepted for dynamic fan-out. The expression is evaluated at runtime. It may be local expression returning a list, or a parenthesized `/call name` returning a list, such as `in(/call plan_shards)`. If `/call` returns an object with a `plans` array, ATM expands that array. Scalar items render with `{{plan}}`; object items can be accessed with fields such as `{{area.name}}`. `range(stop)`, `range(start, stop)`, and `range(start, stop, step)` are available for Python-style integer ranges; `step` cannot be `0`. Use `files()` and `dirs()` for one-level entries under the task workdir, or `walkFiles()` and `walkDirs()` for recursive traversal; each accepts an optional root such as `walkFiles("src")` or `walkFiles(outputDir("reports"))`. Generated and dependency-heavy directories such as `.git`, `node_modules`, `vendor`, `dist`, and `build` are skipped. This is a version-stable rule: legacy `/for file`, `/for dir`, and `/for path` headers are invalid, and file or directory traversal must go through the expression form. If the dynamic sequence is empty, ATM emits a runtime warning and skips the loop body.
+
+The loop variable renders with `{{n}}`, `{{dir}}`, `{{file}}`, `{{area}}`, or fields from a dynamic object item. Fixed-count `/for number`, such as `/for 10`, remains supported and only binds lowercase `n`.
 
 Command order matters when `/for` and `/go` share a line:
 
 ```txt
 /for 3 /go
-Review shard {{N}}.
+Review shard {{n}}.
 ```
 
 This starts one background branch per loop item. For readability, the same flow can be split across lines:
@@ -617,14 +688,14 @@ The reverse order keeps the loop inside a single background task:
 
 ```txt
 /go /for 3
-Review shard {{N}}.
+Review shard {{n}}.
 ```
 
-Both forms still write one generated `> [!ATM]` result block for the todo block. For `/for ... /go`, each loop item is labelled as a separate agent branch such as `N=1` or `area=api`; `-messages N` keeps the most recent N structured assistant messages for each branch, so the default `-messages 1` still shows one message from every parallel branch.
+Both forms still write one generated `> [!ATM]` result block for the todo block. For `/for ... /go`, each loop item is labelled as a separate agent branch such as `n=0` or `area=api`; `-messages N` keeps the most recent N structured assistant messages for each branch, so the default `-messages 1` still shows one message from every parallel branch.
 
 ### `/pool name max [buffer]`
 
-Declare a named background worker pool. Pool declarations are global blocks; they configure later `/go poolName` commands and do not run an agent.
+Declare a named background worker pool. Pool declarations are scoped declaration blocks: a root-level `/pool` is visible to later tasks in the whole document, while a heading-level `/pool` is visible only to later tasks in that heading and its child headings. Sibling headings do not inherit it, and `/pool` is not hoisted before its declaration. A pool declaration configures later `/go poolName` commands and does not run an agent.
 
 ```txt
 /pool tester 5
@@ -658,6 +729,8 @@ Review {{area}}.
 
 `atm` will not start the same unchanged block twice while it is in flight.
 
+`/go` does not imply a join. If the document contains background work with no later matching `/wait`, `atm check` and `atm plan` report a warning but still accept the file. `atm run` exits when no foreground work remains; unmatched background blocks may remain marked `running` and are reported as left without `/wait`. This is useful for intentional monitor-style background agents, but most fan-out workflows should add an explicit `/wait`.
+
 ### `/wait`
 
 Wait for all previously started `/go` tasks.
@@ -668,11 +741,11 @@ Standalone wait block:
 /wait
 ```
 
-Embedded wait before another prompt:
+`/wait` with no prompt is a pure join. `/wait` with prompt is a wait coordinator task: ATM starts the prompt while matching background work may still be running, gives it a coordination context with the wait scope, pending task block numbers, pool names, current visible ATM report/status, log paths, and the current cancellation capability. The current runtime reports cancellation as unavailable; the coordinator should still say when cancellation would be appropriate. ATM then waits for those tasks before marking the wait task done.
 
 ```txt
 /wait
-Run after background tasks finish.
+Watch the background reviews, summarize failures and follow-up work, and report whether manual intervention is needed.
 ```
 
 Use `/wait poolName` to wait only for earlier work submitted to that named pool:
@@ -682,19 +755,23 @@ Use `/wait poolName` to wait only for earlier work submitted to that named pool:
 Summarize tester findings while other pools may still be running.
 ```
 
-Before the process exits, `atm` waits for all remaining background work.
+`atm check` and `atm plan` warn when background work has no later matching `/wait`; write `/wait` when the workflow depends on those results.
 
 ## Plan Dry-Run
 
-Use `atm plan` to inspect how command order will be interpreted. It parses the todo file and prints global declarations, conditional control blocks, the flow for each runnable block, task-level DB/skill/MCP configuration, and runner arguments, but does not run bash, does not call the selected tool, and does not write result blocks.
+Use `atm plan` to inspect how command order will be interpreted. It parses the todo file and prints the document title and Markdown section tree, global declarations, conditional control blocks, loop expansion summaries, condition branch/skipped summaries, the source line and Markdown scope/title path for each runnable block, each block's default context summary, per-task decision/reason summaries, flow, variable reference/source summaries, task runtime environment, task-level DB/skill/MCP configuration, the resolved task resource view, async fan-out and `/wait` join summaries, and runner arguments. The decision summary labels foreground execution, background dispatch, pure wait joins, wait coordinator tasks, conditional branches, parent/child dependencies, and branch skip/no-op reasons. The runtime summary extracts resume mode, args, `/cd`, pre-agent `/bash`, and lazy providers from the flow. The resource view expands default `scope:global` DB mounts plus explicit `/db use/access/ignore`, `/skill use`, `/mcp use`, and `/mcp def use` settings. By default it is a static dry-run: it does not run bash, does not call the selected tool, does not execute lazy providers, and does not write result blocks.
 
 ```sh
+atm plan todo.txt
 atm plan -file todo.txt
+atm plan --preview -file todo.txt
 ```
 
-`atm plan dry-run -file todo.txt` is accepted as an explicit alias.
+`atm plan dry-run todo.txt` and `atm plan dry-run -file todo.txt` are accepted as explicit aliases.
 
-Use `-html FILE` to save a browser-friendly flowchart, or `-open` to generate one and open it in the default browser:
+Use `--preview` when you explicitly want provider values in the plan. Preview mode may execute lazy `/let name /bash ...` providers and pure lazy `/let name /call ...` providers whose definitions can return without running an agent. It prints values in text or JSON output. It still does not run agents, does not write main-document reports, and does not update `.atm/state.json`. A lazy call provider whose definition needs runtime execution is listed as not executed.
+
+Use `-html FILE` to save a browser-friendly flowchart, or `-open` to generate one and open it in the default browser. The HTML view shows parent/child task links, WaitAgent coordinator tasks, explicit `/wait` joins, and unjoined background work separately; it does not display an implicit final wait.
 
 ```sh
 atm plan -file todo.txt -html plan.html
@@ -709,11 +786,30 @@ atm plan -json -file todo.txt
 
 The JSON format is intended as a tool-facing contract:
 
-- `source`, `globals`, `tasks`, `tasks[].block`, `tasks[].prompt`, and `tasks[].ops` are stable fields.
-- `imports`, `dbs`, `skills`, `mcps`, and `controls` expose parsed declaration or control blocks when present; `tasks[].db`, `tasks[].skill`, and `tasks[].mcp` expose task-local tool configuration when present.
-- `ops[].kind` is stable; new operation kinds may be added in future minor versions.
-- Existing operation fields are additive-compatible. Consumers should ignore unknown fields.
+- `source`, `document`, `globals`, `tasks`, `tasks[].block`, `tasks[].prompt`, and `tasks[].flow` are stable fields. `document.title` is the first level-1 heading when present; `document.sections` is the nested Markdown section tree with heading line, level, title, and path.
+- `tasks[].context` summarizes default Markdown context that will be prepended to the task prompt. It reports line count, character count, and a preview rather than duplicating the full context text.
+- `tasks[].decision` gives the planned task action and reason. It distinguishes foreground execution, `/go` background dispatch, pure `/wait` joins, `/wait` coordinator tasks, conditional execution, parent/child dependencies, and skipped/no-op branch reasons.
+- `loops` summarizes every `/for` node with task/block, variable name, static values/count when known, dynamic source expression or call, `until` condition, and run options. Static loops expose their values; dynamic loops expose the source without executing it.
+- `conditions` lists conditional tasks with their condition kind/text and the static branch outcome: true executes then and skips else when present; false skips then and either executes else or no-ops when no else branch exists.
+- `imports`, `dbs`, `skills`, `mcps`, and `controls` expose parsed declaration or control blocks when present; `tasks[].db`, `tasks[].skill`, and `tasks[].mcp` expose task-local tool configuration when present; `tasks[].resources` exposes the resolved DB/skill/MCP/def-MCP resource view that the task will receive.
+- `tasks[].variables` lists `{{name}}` references found in the prompt or output config. Each item marks the source as `global-let`, `global-lazy-bash`, `task-let`, `task-lazy-bash`, `task-lazy-call`, `loop`, or `unresolved`; literal values are included when known without executing a provider.
+- `tasks[].runtime` summarizes runtime environment inputs: `resume`, runner `args`, `workdirs` from `/cd`, pre-agent `bash` commands, and lazy providers. The same data remains available in `tasks[].flow`; `runtime` is the convenient tool-facing view.
+- `async.background` lists tasks that dispatch background work, `async.joins` lists explicit `/wait` joins, and `async.unjoined` lists background work that has no later matching `/wait`; `fanout` describes the loop or single-branch source behind each background dispatch.
+- `tasks[].flow.kind` and nested `children`/`elseChildren` describe control order; new flow kinds may be added in future minor versions.
+- Existing flow fields are additive-compatible. Consumers should ignore unknown fields.
 - Block numbers are 1-based and refer to the current source file snapshot.
+
+## Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Command succeeded; for `run` and `exec`, all planned work for that invocation completed. |
+| `1` | Execution failure, including agent, bash, filesystem, or tool-adapter errors. |
+| `2` | CLI/DSL validation failure, including task syntax, expressions, duplicate report ids, unknown pool/db/skill/MCP references, or error-level `check` diagnostics. |
+| `3` | Hard state inconsistency; inspect or repair the relationship between `.atm/state.json`, main-document report blocks, and `.atm/reports/`. |
+| `130` | User interrupt. On POSIX, other terminating signals return `128 + signal`. |
+
+`atm check` reports audit artifact mismatches as warnings by default and still exits `0`, because a missing detail report or orphan report often needs human review but does not necessarily make the DSL invalid. Exit code `3` is reserved for hard state inconsistency errors.
 
 ## Result Blocks
 
@@ -723,33 +819,68 @@ Result blocks are generated state. They can be removed with `atm untag`.
 
 ```txt
 Task prompt
+<!-- atm:report v=2 id=task-prompt-6f2d9c8a41 source=sha256:6f2d9c8a41e3c2e2c... rendered=sha256:54c0ffee... report=.atm/reports/task-prompt-6f2d9c8a41.md status=done -->
 > [!ATM]
 > status: done
 > started: 2026-05-08 14:30
 > finished: 2026-05-08 14:32
 > duration: 2m
 > runs: 1x
+> id: task-prompt-6f2d9c8a41
+> source: sha256:6f2d9c8a41e3c2e2c...
+> rendered: sha256:54c0ffee...
+> report: .atm/reports/task-prompt-6f2d9c8a41.md
 >
 > messages:
 > - assistant (codex):
 >   Fixed the parser tests.
+<!-- /atm:report -->
 ```
 
-Fields are status, start time, finish time, duration, total run count, and recent assistant messages. Codex is run with structured JSON events, and Claude Code is run with stream JSON, so `atm` can extract assistant messages without scraping terminal text.
+Fields are status, start time, finish time, duration, total run count, stable report id, task source hash, rendered prompt hash, detail report path, and recent assistant messages. Codex is run with structured JSON events, and Claude Code is run with stream JSON, so `atm` can extract assistant messages without scraping terminal text.
+
+Result blocks are wrapped by `<!-- atm:report ... -->` and `<!-- /atm:report -->`; ATM uses that boundary when replacing generated state. The inner `> [!ATM]` quote block is the visible summary for humans and agents. `id` is the stable identity for this task/report. `source` is the `sha256` of the task source at the time ATM writes the result block. `rendered` is the `sha256` of the prompt actually sent to the agent after variables and lazy providers resolve. `report` points to the detailed Markdown report under `.atm/reports/`. Together they let ATM associate reports with tasks after document edits instead of relying only on document position. Legacy result blocks may omit the HTML boundary and identity fields, but new result blocks include them. Duplicate `id` values in one document are errors in `atm check`, `atm plan`, and execution-time parsing; repair the duplicate identities before continuing.
 
 ### Running
 
 ```txt
 Task prompt
+<!-- atm:report v=2 id=task-prompt-6f2d9c8a41 source=sha256:6f2d9c8a41e3c2e2c... rendered=sha256:54c0ffee... report=.atm/reports/task-prompt-6f2d9c8a41.md status=running -->
 > [!ATM]
 > status: running
 > started: 2026-05-08 14:30
 > step: 1
 > step-runs: 1x
 > total-runs: 1x
+> id: task-prompt-6f2d9c8a41
+> source: sha256:6f2d9c8a41e3c2e2c...
+> rendered: sha256:54c0ffee...
+> report: .atm/reports/task-prompt-6f2d9c8a41.md
+<!-- /atm:report -->
 ```
 
-Running blocks let interrupted or failed loops resume from the remaining work instead of starting from zero. `atm` only replaces a trailing generated `> [!ATM]` block while holding the block lease; edits to the task body make the lease obsolete and force a rescan.
+Running blocks let interrupted or failed loops resume from the remaining work instead of starting from zero. `atm` only replaces a trailing generated `> [!ATM]` block while holding the block lease; edits to the task body make the lease obsolete and force a rescan. `id`, `source`, `rendered`, and `report` are written on running, done, and skipped states for later deduplication and report association. When a task finishes, ATM writes `.atm/reports/<id>.md` next to the original todo file; the main document keeps only the lightweight summary.
+
+### Failed
+
+```txt
+Task prompt
+<!-- atm:report v=2 id=task-prompt-6f2d9c8a41 source=sha256:6f2d9c8a41e3c2e2c... rendered=sha256:54c0ffee... report=.atm/reports/task-prompt-6f2d9c8a41.md status=failed -->
+> [!ATM]
+> status: failed
+> started: 2026-05-08 14:30
+> finished: 2026-05-08 14:31
+> duration: 1m
+> runs: 0x
+> error: task 1 run failed: simulated failure
+> id: task-prompt-6f2d9c8a41
+> source: sha256:6f2d9c8a41e3c2e2c...
+> rendered: sha256:54c0ffee...
+> report: .atm/reports/task-prompt-6f2d9c8a41.md
+<!-- /atm:report -->
+```
+
+Failed tasks write a `failed` result block, a `.atm/reports/<id>.md` detail report, and `.atm/state.json` state. `failed` is terminal generated state: later `atm run` calls do not silently rerun it as pending work. After fixing the cause, remove generated state with `atm untag` and run again.
 
 ## Subcommands
 
@@ -775,11 +906,70 @@ atm run -file todo.txt -file rollout.md
 
 Execution artifacts are written to an output directory. By default, `atm` creates `.atm/YYYYMMDDHHMMSS`, adding `-1`, `-2`, and so on if a directory with the same timestamp already exists. Use `-output DIR` or `-o DIR` to choose a specific directory. The directory contains:
 
-- `task-NNN-*.log`: combined human-readable stdout/stderr for a task block.
 - `task-NNN-run-NNN-TOOL[-BRANCH].jsonl`: the native structured event stream emitted by the agent for that execution.
 - `result.md`: the final todo document snapshot, including generated `> [!ATM]` result blocks, saved before later `untag` cleanup.
 
+ATM also maintains `.atm/state.json`, `.atm/reports/*.md`, `.atm/logs/*.log`, and a short-lived `.atm/lock` next to the original todo file. `state.json` is machine-recoverable state keyed by stable task/report id; it records status, source/rendered prompt hash, plan hash, report path, log paths, and run count. `.atm/reports/` stores detailed Markdown reports for each task. `.atm/logs/` stores combined human-readable stdout/stderr logs for task blocks. `.atm/lock` serializes local writes to the same document. `sourcePromptHash` is based on the task source plus visible Markdown context that enters the prompt, including explicit `/context` sections and excluding `/doc` text. It does not include child task result reports. `renderedPromptHash` is based on the actual prompt sent to the agent, including variable/lazy-provider expansion and visible child task report summaries. `planHash` is based on the control-flow, output, and resource configuration shape. These paths are not changed by `-output DIR`; the main todo document remains the lightweight human-readable collaboration record.
+
+If a task block is deleted or edited enough to obsolete its lease while the task is running, ATM does not write the completed result back into the main document. It still writes `.atm/reports/<id>.md`, marks `"orphan": true` in `.atm/state.json`, and prints an orphan report notice on the command line.
+
+`atm check` validates obvious consistency issues across main-document report blocks, `.atm/state.json`, and `.atm/reports/*.md`. It warns about missing detail reports, task ids present in state but absent from the main document, document/state status, report-path, source-hash, or rendered-prompt-hash mismatches, and orphan detail reports.
+
 When one `-output DIR` is used with multiple input files, `atm` creates one numbered subdirectory per file under `DIR` so result documents and native event streams do not overwrite each other.
+
+### `exec`
+
+Run pending prompt blocks from the startup snapshot:
+
+```sh
+atm exec todo.txt
+atm exec -file todo.txt
+```
+
+`exec` accepts the same tool, output, message, concurrency, state, report, and locking behavior as `run`, but freezes the task block set at startup. Task blocks appended later with `atm append` or manual editing stay in the document but are not executed by that `exec` process; run `atm run` or `atm exec` again to pick them up. Edits to existing startup blocks still go through source-hash and block-lease checks, so a completed old snapshot can become an orphan report instead of incorrectly marking edited text as done.
+
+Use `run` for live collaboration: it keeps rescanning the active todo file and may execute tasks appended while the current run is still active. Use `exec` for release, CI, or reproducible one-shot execution: it binds the run to the task set visible when the command started.
+
+| Command | Execution set | Tasks appended while running | Typical use |
+| --- | --- | --- | --- |
+| `atm run` | Rescanned active document | May be picked up by the same execution | Live collaboration, appending follow-up work while agents run |
+| `atm exec` | Task snapshot frozen at startup | Left for a later execution | Release, CI, reproduction, one-shot batch execution |
+
+### `report`
+
+Summarize task reports and ATM audit state without running agents, bash, or checks:
+
+```sh
+atm report -file todo.txt
+atm report -json -file todo.txt
+```
+
+`report` reads the main document report blocks, `.atm/state.json`, and `.atm/reports/*.md`. It prints counts for `done`, `running`, `failed`, `skipped`, and `draft`, then lists failed tasks, orphan reports, and recent log paths. `draft` means task blocks that still compile as pending executable work. Use `-json` when another tool or CI should consume the summary; task entries include available `id`, `status`, `report`, `source`, and `rendered` fields.
+
+### `clean`
+
+Remove generated ATM state without deleting user-authored document text:
+
+```sh
+atm clean todo.txt
+atm clean todo.txt --reports
+atm clean todo.txt --state
+atm clean todo.txt --logs
+atm clean todo.txt --all
+```
+
+With no cleanup option, `clean` removes only generated report/status blocks from the main document and keeps `.atm/state.json`, `.atm/reports/`, and `.atm/logs/`. Explicit options remove audit artifacts: `--reports` deletes `.atm/reports/`, `--state` deletes `.atm/state.json`, `--logs` deletes `.atm/logs/`, and `--all` cleans the document blocks plus those `.atm` artifacts. `clean` accepts positional file arguments and `-file PATH`.
+
+### `repair-ids`
+
+Repair duplicate ATM report identities in the main document:
+
+```sh
+atm repair-ids todo.txt
+atm repair-ids -file todo.txt
+```
+
+If a generated report block is copied with a task, the document can contain duplicate `id` values and `atm check` will fail. `repair-ids` keeps the first occurrence and rewrites later duplicates with a unique id, source hash, and report path derived from that task block. It only edits the main document's report identity; it does not delete `.atm/state.json` or `.atm/reports/`. Run `atm report` or `atm check` afterward to inspect any remaining audit warnings, then use `atm clean` if stale audit artifacts should be removed.
 
 ### `append`
 
@@ -887,6 +1077,6 @@ Use `atm append -file todo.txt ...` during a run. The command resolves the activ
 
 - Paths passed to `-file` and `-codex` use the current shell's normal path syntax.
 - Paths passed to `-claude` follow the same rule.
-- Output logs are written under the operating system temp directory.
+- Human-readable task logs are written under `.atm/logs/` next to the source todo file.
 - On handled interrupts, the active todo file is restored before the process exits.
 - On POSIX systems, interrupt and terminate signals are handled. On Windows, console interrupt is handled.

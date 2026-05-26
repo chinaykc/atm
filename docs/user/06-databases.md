@@ -14,7 +14,7 @@
 
 ## 声明数据库
 
-声明块写成独立任务块，不会运行 agent：
+声明块写成 scoped 声明块，不会运行 agent：
 
 ```txt
 /db new decisions scope:global persist:project access:write
@@ -25,7 +25,7 @@
 
 | 字段 | 可选值 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `scope` | `global`、`local` | `global` | 是否默认对后续任务块可见 |
+| `scope` | `global`、`local` | `global` | 是否在声明可见范围内默认挂载给后续任务块 |
 | `persist` | `run`、`project` | `run` | 数据保存到本次 run 目录，还是项目 `.atm/db` |
 | `access` | `read`、`append`、`write`、`admin` | `admin` | 声明允许的最大权限 |
 
@@ -33,10 +33,12 @@
 
 ## 可见范围和持久化是两件事
 
-`scope` 只控制“哪些任务块默认能看到 DB”：
+`/db new` 本身按 Markdown 词法作用域可见：根部声明对全文后续任务可见；heading 内声明只对该 heading 的后续任务和子 heading 可见，不能被同级 heading 使用，也不能在声明前使用。
 
-- `scope:global`：声明点之后的任务块默认挂载这个 DB。
-- `scope:local`：不会默认挂载；任务块必须写 `/db use name`。
+`scope` 只控制“在可见声明集合里，哪些任务块默认能看到 DB”：
+
+- `scope:global`：声明可见范围内，声明点之后的任务块默认挂载这个 DB。
+- `scope:local`：不会默认挂载；可见范围内的任务块必须写 `/db use name`。
 
 `persist` 只控制“数据文件保存多久”：
 

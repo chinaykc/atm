@@ -22,7 +22,10 @@ coverage.*
 
 # Local tool state
 .agents/
+.claude/
 .codex/
+.cursor/
+.mcp.json
 .playwright-mcp/
 
 # Editor and OS files
@@ -38,3 +41,17 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+.envrc
+
+# Local credentials and certificates
+.netrc
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.kubeconfig
