@@ -12,7 +12,6 @@ esac
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out_dir="$root/dist/$version"
-staging_dir="$out_dir/staging"
 cache_dir="${GOCACHE:-$out_dir/.gocache}"
 commit="unknown"
 if git -C "$root" rev-parse --short=12 HEAD >/dev/null 2>&1; then
@@ -48,34 +47,6 @@ else
   )
 fi
 
-zip_dir() {
-  local source_dir="$1"
-  local zip_path="$2"
-  python3 - "$source_dir" "$zip_path" <<'PY'
-import os
-import sys
-import zipfile
-
-source_dir = os.path.abspath(sys.argv[1])
-zip_path = os.path.abspath(sys.argv[2])
-root = os.path.dirname(source_dir)
-
-with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-    for dirpath, dirnames, filenames in os.walk(source_dir):
-        dirnames.sort()
-        filenames.sort()
-        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
-        if rel_dir != ".":
-            info = zipfile.ZipInfo(rel_dir.rstrip("/") + "/")
-            info.external_attr = (0o755 << 16) | 0x10
-            archive.writestr(info, b"")
-        for filename in filenames:
-            path = os.path.join(dirpath, filename)
-            arcname = os.path.relpath(path, root).replace(os.sep, "/")
-            archive.write(path, arcname)
-PY
-}
-
 write_sha256() {
   local file="$1"
   local out="$2"
@@ -95,32 +66,28 @@ PY
 }
 
 rm -rf "$out_dir"
-mkdir -p "$staging_dir" "$cache_dir"
+mkdir -p "$out_dir" "$cache_dir"
 
 for target in "${targets[@]}"; do
   goos="${target%/*}"
   goarch="${target#*/}"
-  name="atm_${version}_${goos}_${goarch}"
-  package_dir="$staging_dir/$name"
-  binary="atm"
+  binary="atm-${goos}-${goarch}"
   if [[ "$goos" == "windows" ]]; then
-    binary="atm.exe"
+    binary="${binary}.exe"
   fi
+  binary_path="$out_dir/$binary"
 
-  mkdir -p "$package_dir"
   (
     cd "$root"
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOCACHE="$cache_dir" go build \
       -trimpath \
       -buildvcs=false \
       -ldflags="${ldflags[*]}" \
-      -o "$package_dir/$binary" \
+      -o "$binary_path" \
       ./cmd/atm
   )
 
-  cp "$root/LICENSE" "$root/README.md" "$root/README.zh-CN.md" "$root/SECURITY.md" "$package_dir/"
-  zip_dir "$package_dir" "$out_dir/$name.zip"
-  write_sha256 "$out_dir/$name.zip" "$out_dir/$name.sha256"
+  write_sha256 "$binary_path" "$binary_path.sha256"
 done
 
 (
@@ -128,7 +95,6 @@ done
   cat ./*.sha256 | sort -k2 > checksums.txt
 )
 
-rm -rf "$staging_dir"
 if [[ "${GOCACHE:-}" == "" ]]; then
   rm -rf "$cache_dir"
 fi

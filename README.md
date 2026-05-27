@@ -30,7 +30,16 @@ If a runner is not on `PATH`, pass its executable path with `--codex /path/to/co
 
 ## Install
 
-Download the archive for your platform from GitHub Releases, unzip it, and put the `atm` binary on `PATH`.
+Download the binary for your platform from GitHub Releases and put it on `PATH`.
+
+On Linux or macOS:
+
+```sh
+chmod +x atm-linux-amd64
+mv atm-linux-amd64 atm
+```
+
+On Windows, download the matching `.exe`, such as `atm-windows-amd64.exe`.
 
 Check the installed binary:
 

@@ -30,7 +30,16 @@ ATM 会把这个文件编译成 agent 执行计划。任务可以顺序执行、
 
 ## 安装
 
-从 GitHub Releases 下载对应平台的压缩包，解压后把 `atm` 可执行文件放到 `PATH` 中即可。
+从 GitHub Releases 下载对应平台的二进制文件，并把它放到 `PATH` 中。
+
+Linux 或 macOS：
+
+```sh
+chmod +x atm-linux-amd64
+mv atm-linux-amd64 atm
+```
+
+Windows 下载对应的 `.exe`，例如 `atm-windows-amd64.exe`。
 
 检查已安装的二进制：
 
