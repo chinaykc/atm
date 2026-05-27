@@ -1,14 +1,18 @@
-package atm_test
+package architecture_test
 
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestPackageArchitecture(t *testing.T) {
-	out, err := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", "./...").Output()
+	repoRoot := filepath.Join("..", "..")
+	cmd := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", "./...")
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("go list package graph: %v", err)
 	}
@@ -48,6 +52,7 @@ func TestPackageArchitecture(t *testing.T) {
 }
 
 func TestRemovedFlatPackageDirsStayRemoved(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
 	for _, dir := range []string{
 		"pkg/cli",
 		"pkg/dsl",
@@ -59,7 +64,8 @@ func TestRemovedFlatPackageDirsStayRemoved(t *testing.T) {
 		"pkg/todo",
 		"pkg/tools",
 	} {
-		if _, err := os.Stat(dir); err == nil {
+		path := filepath.Join(repoRoot, dir)
+		if _, err := os.Stat(path); err == nil {
 			t.Fatalf("removed flat package directory still exists: %s", dir)
 		} else if !os.IsNotExist(err) {
 			t.Fatalf("stat %s: %v", dir, err)
