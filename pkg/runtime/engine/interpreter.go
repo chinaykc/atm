@@ -730,6 +730,9 @@ func (x *taskExecution) executeFlowFor(ctx context.Context, current execContext,
 	if loop.MaxRuns == 0 && loop.Source.Kind == "" && !unbounded {
 		return current, 0, false, fmt.Errorf("task %d /for has no runs", x.task.BlockIndex+1)
 	}
+	if unbounded && flowContainsGo(children) {
+		return current, 0, false, fmt.Errorf("task %d unbounded /for until(expr) cannot launch background branches; write /go /for until(...) to run the loop inside one background branch", x.task.BlockIndex+1)
+	}
 	for runIndex := startRun; unbounded || runIndex < maxRuns; runIndex++ {
 		child := execContext{
 			vars:       ir.CloneVars(current.vars),
@@ -787,6 +790,17 @@ func (x *taskExecution) executeFlowFor(ctx context.Context, current execContext,
 		return current, total, false, fmt.Errorf("task %d condition not satisfied after %d run(s)", x.task.BlockIndex+1, loop.MaxRuns)
 	}
 	return current, total, background, nil
+}
+
+func flowContainsGo(nodes []compiler.FlowNode) bool {
+	for _, node := range nodes {
+		for _, op := range ir.FlattenFlow(node) {
+			if op.Kind == compiler.FlatOpGo {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (x *taskExecution) startFlowBranch(ctx context.Context, current execContext, children []compiler.FlowNode, childOffset int, pool string) error {

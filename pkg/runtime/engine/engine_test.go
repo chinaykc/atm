@@ -105,9 +105,10 @@ func (r *deletingRunner) Check(ctx context.Context, todoPath, prompt, condition 
 }
 
 type blockingRunner struct {
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+	once     sync.Once
 }
 
 func (r *blockingRunner) Name() string {
@@ -116,6 +117,7 @@ func (r *blockingRunner) Name() string {
 
 func (r *blockingRunner) Execute(ctx context.Context, todoPath, prompt string, opts compiler.RunOptions, stdout, stderr io.Writer) (agent.ExecuteResult, error) {
 	r.once.Do(func() { close(r.started) })
+	defer close(r.finished)
 	select {
 	case <-r.release:
 	case <-ctx.Done():
@@ -349,7 +351,7 @@ func TestForBeforeGoStartsOneBackgroundBranchPerLoopItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
-	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out"), GlobalJobs: 2}); err != nil {
 		t.Fatal(err)
 	}
 	events := strings.Join(runner.snapshot(), "\n")
@@ -368,7 +370,7 @@ func TestGoWithoutWaitDoesNotJoinBeforeExit(t *testing.T) {
 	if err := os.WriteFile(file, []byte("/go\nslow background\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runner := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
+	runner := &blockingRunner{started: make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{})}
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")})
@@ -382,7 +384,12 @@ func TestGoWithoutWaitDoesNotJoinBeforeExit(t *testing.T) {
 		close(runner.release)
 		t.Fatal("expected run to exit without waiting for background task")
 	}
-	close(runner.release)
+	select {
+	case <-runner.started:
+	case <-time.After(200 * time.Millisecond):
+		close(runner.release)
+		t.Fatal("expected background task to start")
+	}
 
 	updated, err := os.ReadFile(file)
 	if err != nil {
@@ -391,6 +398,12 @@ func TestGoWithoutWaitDoesNotJoinBeforeExit(t *testing.T) {
 	content := string(updated)
 	if !strings.Contains(content, "> status: running") || strings.Contains(content, "> status: done") {
 		t.Fatalf("expected abandoned background task to remain running, got:\n%s", content)
+	}
+	close(runner.release)
+	select {
+	case <-runner.finished:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected background task to finish after release")
 	}
 }
 

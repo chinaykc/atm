@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -20,5 +21,20 @@ func requirePOSIXShell(t *testing.T) {
 	}
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("test requires sh")
+	}
+}
+
+func assertSameFile(t *testing.T, got, want string) {
+	t.Helper()
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat registered file %q: %v", got, err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat expected file %q: %v", want, err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("registered file %q does not identify expected file %q", got, want)
 	}
 }

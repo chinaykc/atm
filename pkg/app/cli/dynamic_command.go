@@ -27,7 +27,17 @@ func discoverDynamicCommands() ([]dynamicCommand, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dynamicCommandsFromRegistry(registry)
+	active := dynamicIndex{}
+	for _, command := range registry.Commands {
+		if _, err := os.Stat(command.File); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat dynamic command %s: %w", command.File, err)
+		}
+		active.Commands = append(active.Commands, command)
+	}
+	return dynamicCommandsFromRegistry(active)
 }
 
 func dynamicCommandsFromRegistry(registry dynamicIndex) ([]dynamicCommand, error) {

@@ -447,7 +447,7 @@ func TestFlagScanRegistersProjectLocalDynamicCommands(t *testing.T) {
 
 func TestFlagRegisterGlobalWritesGlobalRegistry(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	withGlobalRegistryDirectory(t, dir)
 	withWorkingDirectory(t, dir)
 	file := filepath.Join(dir, "review.todo.md")
 	if err := os.WriteFile(file, []byte("/task\nreview\n"), 0o644); err != nil {
@@ -459,16 +459,34 @@ func TestFlagRegisterGlobalWritesGlobalRegistry(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".atm", "flag", "index.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected no local registry, stat err=%v", err)
 	}
-	globalPath, err := dynamicRegistryPathForScope(true)
+	registry, err := loadDynamicRegistry(true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(globalPath)
+	if len(registry.Commands) != 1 || registry.Commands[0].Name != "review" {
+		t.Fatalf("unexpected global registry: %#v", registry.Commands)
+	}
+	assertSameFile(t, registry.Commands[0].File, file)
+}
+
+func TestMissingRegisteredDynamicCommandCanBeUnregistered(t *testing.T) {
+	dir := t.TempDir()
+	withGlobalRegistryDirectory(t, dir)
+	withWorkingDirectory(t, dir)
+
+	missing := filepath.Join(dir, "deleted.todo.md")
+	if err := saveDynamicRegistry(dynamicIndex{Commands: []dynamicRegistration{{Name: "deleted", File: missing}}}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"flag", "unregister", "deleted", "-g"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("unregister stale command: %v", err)
+	}
+	registry, err := loadDynamicRegistry(true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"name": "review"`) || !strings.Contains(string(data), file) {
-		t.Fatalf("unexpected global registry:\n%s", data)
+	if len(registry.Commands) != 0 {
+		t.Fatalf("expected stale registration removed, got %#v", registry.Commands)
 	}
 }
 

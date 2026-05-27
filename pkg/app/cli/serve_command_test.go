@@ -111,7 +111,7 @@ func TestServeScanRegistersProjectLocalAPIFiles(t *testing.T) {
 
 func TestServeRegisterGlobalWritesGlobalRegistry(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	withGlobalRegistryDirectory(t, dir)
 	withWorkingDirectory(t, dir)
 
 	file := filepath.Join(dir, "api.todo.md")
@@ -124,17 +124,22 @@ func TestServeRegisterGlobalWritesGlobalRegistry(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".atm", "api", "index.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected no local registry, stat err=%v", err)
 	}
-	globalPath, err := apiRegistryPathForScope(true)
+	registry, err := loadAPIRegistry(true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(globalPath)
-	if err != nil {
-		t.Fatal(err)
+	if len(registry.APIs) != 1 || registry.APIs[0].Path != "/api" {
+		t.Fatalf("unexpected global registry: %#v", registry.APIs)
 	}
-	if !strings.Contains(string(data), `"path": "/api"`) || !strings.Contains(string(data), file) {
-		t.Fatalf("unexpected global registry:\n%s", data)
-	}
+	assertSameFile(t, registry.APIs[0].File, file)
+}
+
+func withGlobalRegistryDirectory(t *testing.T, dir string) {
+	t.Helper()
+	config := filepath.Join(dir, "config")
+	t.Setenv("XDG_CONFIG_HOME", config)
+	t.Setenv("APPDATA", config)
+	t.Setenv("HOME", filepath.Join(dir, "home"))
 }
 
 func withWorkingDirectory(t *testing.T, dir string) {
