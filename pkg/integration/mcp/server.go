@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,6 +68,18 @@ func JSONTextResult(value any) (*mcpsdk.CallToolResult, error) {
 		return nil, err
 	}
 	return textResult(string(data)), nil
+}
+
+func DecodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected trailing JSON value")
+	}
+	return nil
 }
 
 func objectSchema() map[string]any {

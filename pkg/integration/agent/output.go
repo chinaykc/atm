@@ -14,8 +14,9 @@ import (
 )
 
 type agentStreamResult struct {
-	messages []ir.OutputMessage
-	raw      string
+	messages  []ir.OutputMessage
+	raw       string
+	sessionID string
 }
 
 type agentDisplayEvent struct {
@@ -29,6 +30,7 @@ type agentDisplayEvent struct {
 type agentEventParser struct {
 	tool              string
 	messages          []ir.OutputMessage
+	sessionID         string
 	claudeFallback    string
 	displayedToolCall map[string]bool
 }
@@ -72,7 +74,7 @@ func runAgentCommand(cmd *exec.Cmd, tool string, stdout, stderr io.Writer) (agen
 	if rendered == 0 {
 		writeRawIfPresent(stdout, raw.String())
 	}
-	result := agentStreamResult{messages: parser.messages, raw: raw.String()}
+	result := agentStreamResult{messages: parser.messages, raw: raw.String(), sessionID: parser.sessionID}
 	if waitErr != nil {
 		return result, waitErr
 	}
@@ -115,6 +117,7 @@ func (p *agentEventParser) consumeCodex(event map[string]any) []agentDisplayEven
 	switch eventType {
 	case "thread.started":
 		if id := stringField(event, "thread_id"); id != "" {
+			p.sessionID = id
 			return []agentDisplayEvent{{tool: "codex", kind: "system", name: "thread " + id}}
 		}
 		return []agentDisplayEvent{{tool: "codex", kind: "system", name: "thread started"}}
@@ -180,6 +183,7 @@ func (p *agentEventParser) consumeClaude(event map[string]any) []agentDisplayEve
 			name += " " + model
 		}
 		if sessionID := stringField(event, "session_id"); sessionID != "" {
+			p.sessionID = sessionID
 			name += " session " + sessionID
 		}
 		return []agentDisplayEvent{{tool: "claude", kind: "system", name: name}}

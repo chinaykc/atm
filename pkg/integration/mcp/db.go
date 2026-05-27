@@ -14,9 +14,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/chinaykc/atm/pkg/lang/ir"
+	"github.com/chinaykc/atm/pkg/runtime/store"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -69,8 +69,8 @@ func RunDBServerCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) er
 	if err != nil {
 		return fmt.Errorf("read db config: %w", err)
 	}
-	var config dbServerConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	config, err := parseDBServerConfig(data)
+	if err != nil {
 		return fmt.Errorf("parse db config: %w", err)
 	}
 	return ServeDB(stdin, stdout, config.Databases, readonly)
@@ -93,11 +93,19 @@ func RegisterNetworkDBConfig(configFile string, readonly bool) (NetworkEndpoint,
 	if err != nil {
 		return NetworkEndpoint{}, fmt.Errorf("read db config: %w", err)
 	}
-	var config dbServerConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	config, err := parseDBServerConfig(data)
+	if err != nil {
 		return NetworkEndpoint{}, fmt.Errorf("parse db config: %w", err)
 	}
 	return RegisterNetworkDB(config.Databases, readonly)
+}
+
+func parseDBServerConfig(data []byte) (dbServerConfig, error) {
+	var config dbServerConfig
+	if err := DecodeStrictJSON(data, &config); err != nil {
+		return dbServerConfig{}, err
+	}
+	return config, nil
 }
 
 func newDBSDKServer(dbs []ir.DBRuntime, readonly bool) *mcpsdk.Server {
@@ -131,17 +139,17 @@ func newDBServer(dbs []ir.DBRuntime, readonly bool) dbServer {
 
 func (s dbServer) toolDefinitions() []ToolDefinition {
 	return []ToolDefinition{
-		dbToolDefinition(DBListToolName, "List ATM databases available to this task, including usage and access."),
-		dbToolDefinition(DBGetToolName, "Read one key from an ATM database."),
-		dbToolDefinition(DBScanToolName, "Scan ATM database keys using glob syntax. Use ** to match across slash-separated segments."),
-		dbToolDefinition(DBAppendToolName, "Append string values to one database key. Requires append, write, or admin access."),
-		dbToolDefinition(DBSetToolName, "Replace all string values for one database key. Requires write or admin access."),
-		dbToolDefinition(DBDeleteToolName, "Delete one key, or selected values from one key. Requires admin access."),
+		dbToolDefinition(DBListToolName, "List ATM databases available to this task, including usage and access.", dbListSchema()),
+		dbToolDefinition(DBGetToolName, "Read one key from an ATM database.", dbKeySchema()),
+		dbToolDefinition(DBScanToolName, "Scan ATM database keys using glob syntax. Use ** to match across slash-separated segments.", dbScanSchema()),
+		dbToolDefinition(DBAppendToolName, "Append string values to one database key. Requires append, write, or admin access.", dbWriteSchema(true)),
+		dbToolDefinition(DBSetToolName, "Replace all string values for one database key. Requires write or admin access.", dbWriteSchema(true)),
+		dbToolDefinition(DBDeleteToolName, "Delete one key, or selected values from one key. Requires admin access.", dbWriteSchema(false)),
 	}
 }
 
-func dbToolDefinition(name, description string) ToolDefinition {
-	return ToolDefinition{Name: name, Description: description, InputSchema: objectSchema()}
+func dbToolDefinition(name, description string, schema any) ToolDefinition {
+	return ToolDefinition{Name: name, Description: description, InputSchema: schema}
 }
 
 func (s dbServer) callTool(name string, arguments json.RawMessage) (any, error) {
@@ -189,6 +197,9 @@ func (s dbServer) callTool(name string, arguments json.RawMessage) (any, error) 
 		if err := decodeDBArgs(arguments, &args); err != nil {
 			return nil, err
 		}
+		if err := args.requireValues(); err != nil {
+			return nil, err
+		}
 		db, err := s.requireDB(args.DB, ir.DBAccessAppend)
 		if err != nil {
 			return nil, err
@@ -203,6 +214,9 @@ func (s dbServer) callTool(name string, arguments json.RawMessage) (any, error) 
 	case DBSetToolName:
 		var args dbWriteArgs
 		if err := decodeDBArgs(arguments, &args); err != nil {
+			return nil, err
+		}
+		if err := args.requireValues(); err != nil {
 			return nil, err
 		}
 		db, err := s.requireDB(args.DB, ir.DBAccessWrite)
@@ -256,14 +270,77 @@ type dbWriteArgs struct {
 	Values []string `json:"values"`
 }
 
+func (a dbWriteArgs) requireValues() error {
+	if a.Values == nil {
+		return fmt.Errorf("values is required and must be an array of strings")
+	}
+	return nil
+}
+
 func decodeDBArgs(data json.RawMessage, target any) error {
 	if !json.Valid(data) {
 		return fmt.Errorf("arguments must be valid JSON")
 	}
-	if err := json.Unmarshal(data, target); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
 		return err
 	}
 	return nil
+}
+
+func dbListSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+	}
+}
+
+func dbKeySchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"db":  map[string]any{"type": "string", "description": "Database name."},
+			"key": map[string]any{"type": "string", "description": "Key to read."},
+		},
+		"required":             []string{"db", "key"},
+		"additionalProperties": false,
+	}
+}
+
+func dbScanSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"db":      map[string]any{"type": "string", "description": "Database name."},
+			"pattern": map[string]any{"type": "string", "description": "Glob pattern for keys. Use ** to match across slash-separated segments."},
+			"limit":   map[string]any{"type": "integer", "description": "Maximum number of items to return. Defaults to 100 and is capped at 500."},
+			"cursor":  map[string]any{"type": "string", "description": "Pagination cursor returned by the previous scan."},
+		},
+		"required":             []string{"db"},
+		"additionalProperties": false,
+	}
+}
+
+func dbWriteSchema(requireValues bool) map[string]any {
+	required := []string{"db", "key"}
+	if requireValues {
+		required = append(required, "values")
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"db":  map[string]any{"type": "string", "description": "Database name."},
+			"key": map[string]any{"type": "string", "description": "Key to write."},
+			"values": map[string]any{
+				"type":        "array",
+				"description": "String values to set, append, or delete.",
+				"items":       map[string]any{"type": "string"},
+			},
+		},
+		"required":             required,
+		"additionalProperties": false,
+	}
 }
 
 func (s dbServer) list() map[string]any {
@@ -496,48 +573,23 @@ func writeDBFile(dbPath string, data map[string][]string) error {
 }
 
 type dbLock struct {
-	file *os.File
-	path string
+	lock *store.LockFile
 }
 
 func lockDB(dbPath string) (*dbLock, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, err
 	}
-	lockPath := dbPath + ".lock"
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
-		if err == nil {
-			fmt.Fprintf(file, "pid=%d time=%s\n", os.Getpid(), time.Now().Format(time.RFC3339))
-			return &dbLock{file: file, path: lockPath}, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		removeStaleDBLock(lockPath, 2*time.Second)
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("lock db %q: timed out waiting for existing lock", lockPath)
-		}
-		time.Sleep(10 * time.Millisecond)
+	lock, err := store.LockPath(dbPath + ".lock")
+	if err != nil {
+		return nil, err
 	}
-}
-
-func removeStaleDBLock(lockPath string, maxAge time.Duration) {
-	info, err := os.Stat(lockPath)
-	if err == nil && time.Since(info.ModTime()) > maxAge {
-		_ = os.Remove(lockPath)
-	}
+	return &dbLock{lock: lock}, nil
 }
 
 func (l *dbLock) Close() error {
-	closeErr := l.file.Close()
-	removeErr := os.Remove(l.path)
-	if closeErr != nil {
-		return closeErr
+	if l == nil || l.lock == nil {
+		return nil
 	}
-	if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return removeErr
-	}
-	return nil
+	return l.lock.Close()
 }

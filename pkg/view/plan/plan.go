@@ -3,8 +3,6 @@ package plan
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
 	"github.com/chinaykc/atm/pkg/lang/compiler"
 	"github.com/chinaykc/atm/pkg/lang/document"
@@ -20,101 +18,6 @@ import (
 	"strings"
 	"time"
 )
-
-func RunCLI(args []string, stdout, stderr io.Writer) error {
-	var file string
-	var jsonOut bool
-	var htmlOut string
-	var openHTML bool
-	var preview bool
-	if len(args) > 0 && args[0] == "dry-run" {
-		args = args[1:]
-	}
-	args = reorderPlanFlags(args)
-
-	flags := flag.NewFlagSet("atm plan", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	flags.StringVar(&file, "file", "", "todo file path")
-	flags.BoolVar(&jsonOut, "json", false, "print the IR plan as JSON")
-	flags.BoolVar(&preview, "preview", false, "execute lazy bash providers and include preview values")
-	flags.StringVar(&htmlOut, "html", "", "write an HTML flowchart to this file")
-	flags.BoolVar(&openHTML, "open", false, "open the HTML flowchart in the default browser")
-	flags.Usage = func() {
-		fmt.Fprintln(stderr, "atm plan prints a dry-run execution plan without running tools or bash.")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "Usage of atm plan:")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if flags.NArg() > 1 {
-		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
-	}
-	if flags.NArg() == 1 {
-		if file != "" {
-			return fmt.Errorf("unexpected argument %q", flags.Arg(0))
-		}
-		file = flags.Arg(0)
-	}
-	if file == "" {
-		defaultFile, err := resolveDefaultPlanFile()
-		if err != nil {
-			return err
-		}
-		file = defaultFile
-	}
-	if jsonOut && (htmlOut != "" || openHTML) {
-		return fmt.Errorf("-json cannot be combined with -html or -open")
-	}
-	if preview && (htmlOut != "" || openHTML) {
-		return fmt.Errorf("-preview cannot be combined with -html or -open")
-	}
-	return RunFile(file, stdout, Options{JSON: jsonOut, HTML: htmlOut, Open: openHTML, Preview: preview})
-}
-
-func reorderPlanFlags(args []string) []string {
-	var flags []string
-	var positionals []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			positionals = append(positionals, args[i+1:]...)
-			break
-		}
-		if strings.HasPrefix(arg, "-") && arg != "-" {
-			flags = append(flags, arg)
-			name := strings.TrimLeft(arg, "-")
-			if eq := strings.IndexByte(name, '='); eq >= 0 {
-				name = name[:eq]
-			}
-			if (name == "file" || name == "html") && !strings.Contains(arg, "=") && i+1 < len(args) {
-				i++
-				flags = append(flags, args[i])
-			}
-			continue
-		}
-		positionals = append(positionals, arg)
-	}
-	return append(flags, positionals...)
-}
-
-func resolveDefaultPlanFile() (string, error) {
-	candidates := []string{"todo.txt", "todo.md", "toto.md"}
-	for _, candidate := range candidates {
-		info, err := os.Stat(candidate)
-		if err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("stat default todo file %q: %w", candidate, err)
-		}
-	}
-	return "", fmt.Errorf("no todo file specified and no default todo file found; looked for %s", strings.Join(candidates, ", "))
-}
 
 type Options struct {
 	JSON    bool
@@ -138,7 +41,7 @@ type definitionScopeRef struct {
 func RunFile(filePath string, stdout io.Writer, opts Options) error {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("read todo file %q: %w", filePath, err)
+		return fmt.Errorf("read ATM file %q: %w", filePath, err)
 	}
 	plan, err := compiler.CompileProgram(filePath, string(content))
 	if err != nil {
@@ -174,7 +77,7 @@ func RunFile(filePath string, stdout io.Writer, opts Options) error {
 		if err != nil {
 			abs = path
 		}
-		fmt.Fprintf(stdout, "atm plan HTML: %s\n", abs)
+		fmt.Fprintf(stdout, "atm check plan HTML: %s\n", abs)
 		if opts.Open {
 			if err := openBrowser(abs); err != nil {
 				return err
@@ -183,7 +86,7 @@ func RunFile(filePath string, stdout io.Writer, opts Options) error {
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "atm plan dry-run: %s\n", filePath)
+	fmt.Fprintf(stdout, "atm check plan dry-run: %s\n", filePath)
 	if opts.Preview {
 		fmt.Fprintln(stdout, "preview mode: lazy providers may be executed; no agent, report, or state is written")
 	} else {
@@ -344,19 +247,22 @@ type Condition struct {
 }
 
 type Loop struct {
-	Task       int      `json:"task"`
-	Block      int      `json:"block"`
-	Var        string   `json:"var,omitempty"`
-	Summary    string   `json:"summary"`
-	Mode       string   `json:"mode"`
-	Values     []string `json:"values,omitempty"`
-	Count      int      `json:"count,omitempty"`
-	Source     string   `json:"source,omitempty"`
-	SourceKind string   `json:"sourceKind,omitempty"`
-	Until      string   `json:"until,omitempty"`
-	UntilKind  string   `json:"untilKind,omitempty"`
-	Resume     bool     `json:"resume,omitempty"`
-	Args       []string `json:"args,omitempty"`
+	Task         int      `json:"task"`
+	Block        int      `json:"block"`
+	Var          string   `json:"var,omitempty"`
+	Summary      string   `json:"summary"`
+	Mode         string   `json:"mode"`
+	Values       []string `json:"values,omitempty"`
+	Count        int      `json:"count,omitempty"`
+	Source       string   `json:"source,omitempty"`
+	SourceKind   string   `json:"sourceKind,omitempty"`
+	Until        string   `json:"until,omitempty"`
+	UntilKind    string   `json:"untilKind,omitempty"`
+	Resume       bool     `json:"resume,omitempty"`
+	ResumeTarget string   `json:"resumeTarget,omitempty"`
+	Fork         bool     `json:"fork,omitempty"`
+	ForkTarget   string   `json:"forkTarget,omitempty"`
+	Args         []string `json:"args,omitempty"`
 }
 
 type Async struct {
@@ -510,6 +416,9 @@ type Variable struct {
 
 type Runtime struct {
 	Resume       bool       `json:"resume,omitempty"`
+	ResumeTarget string     `json:"resumeTarget,omitempty"`
+	Fork         bool       `json:"fork,omitempty"`
+	ForkTarget   string     `json:"forkTarget,omitempty"`
 	Args         []string   `json:"args,omitempty"`
 	Workdirs     []Workdir  `json:"workdirs,omitempty"`
 	Bash         []Bash     `json:"bash,omitempty"`
@@ -517,7 +426,7 @@ type Runtime struct {
 }
 
 func (r Runtime) IsZero() bool {
-	return !r.Resume && len(r.Args) == 0 && len(r.Workdirs) == 0 && len(r.Bash) == 0 && len(r.LazyProvider) == 0
+	return !r.Resume && r.ResumeTarget == "" && !r.Fork && r.ForkTarget == "" && len(r.Args) == 0 && len(r.Workdirs) == 0 && len(r.Bash) == 0 && len(r.LazyProvider) == 0
 }
 
 type Context struct {
@@ -571,6 +480,9 @@ type Operation struct {
 	Condition     string              `json:"condition,omitempty"`
 	ConditionKind string              `json:"conditionKind,omitempty"`
 	Resume        bool                `json:"resume,omitempty"`
+	ResumeTarget  string              `json:"resumeTarget,omitempty"`
+	Fork          bool                `json:"fork,omitempty"`
+	ForkTarget    string              `json:"forkTarget,omitempty"`
 	Args          []string            `json:"args,omitempty"`
 	Workdir       string              `json:"workdir,omitempty"`
 	MustExist     bool                `json:"mustExistWorkdir,omitempty"`
@@ -837,8 +749,11 @@ func buildPlanLoopSummary(plan compiler.Plan) []Loop {
 				Source:  op.For.Source.Text,
 				Until:   op.For.Condition.Text,
 				Resume:  op.For.Options.Resume,
+				Fork:    op.For.Options.Fork,
 				Args:    slices.Clone(op.For.Options.Args),
 			}
+			item.ResumeTarget = op.For.Options.ResumeTarget
+			item.ForkTarget = op.For.Options.ForkTarget
 			if op.For.Source.Kind != compiler.ConditionNone {
 				item.SourceKind = string(op.For.Source.Kind)
 			}
@@ -1402,6 +1317,9 @@ func planOpToJSON(op compiler.FlatOp) Operation {
 			out.UntilKind = string(op.For.Condition.Kind)
 		}
 		out.Resume = op.For.Options.Resume
+		out.ResumeTarget = op.For.Options.ResumeTarget
+		out.Fork = op.For.Options.Fork
+		out.ForkTarget = op.For.Options.ForkTarget
 		out.Args = slices.Clone(op.For.Options.Args)
 	case compiler.FlatOpIf:
 		out.Condition = op.If.Condition.Text
@@ -1411,6 +1329,9 @@ func planOpToJSON(op compiler.FlatOp) Operation {
 	case compiler.FlatOpExecute:
 		out.PromptRef = "prompt"
 		out.Resume = op.ExecuteOptions.Resume
+		out.ResumeTarget = op.ExecuteOptions.ResumeTarget
+		out.Fork = op.ExecuteOptions.Fork
+		out.ForkTarget = op.ExecuteOptions.ForkTarget
 		out.Args = slices.Clone(op.ExecuteOptions.Args)
 	case compiler.FlatOpGo, compiler.FlatOpWait:
 		out.Pool = op.Pool
@@ -1707,7 +1628,18 @@ func formatCondition(condition compiler.Condition) string {
 func appendRunOptionSummary(base string, options compiler.RunOptions) string {
 	var parts []string
 	if options.Resume {
-		parts = append(parts, "resume")
+		if options.ResumeTarget != "" {
+			parts = append(parts, "resume="+options.ResumeTarget)
+		} else {
+			parts = append(parts, "resume")
+		}
+	}
+	if options.Fork {
+		if options.ForkTarget != "" {
+			parts = append(parts, "fork="+options.ForkTarget)
+		} else {
+			parts = append(parts, "fork")
+		}
 	}
 	if len(options.Args) > 0 {
 		parts = append(parts, "args="+strings.Join(options.Args, " "))
@@ -1793,11 +1725,29 @@ func buildTaskRuntimeSummary(task compiler.Task) Runtime {
 		case compiler.FlatOpExecute:
 			if op.ExecuteOptions.Resume {
 				out.Resume = true
+				if op.ExecuteOptions.ResumeTarget != "" {
+					out.ResumeTarget = op.ExecuteOptions.ResumeTarget
+				}
+			}
+			if op.ExecuteOptions.Fork {
+				out.Fork = true
+				if op.ExecuteOptions.ForkTarget != "" {
+					out.ForkTarget = op.ExecuteOptions.ForkTarget
+				}
 			}
 			out.Args = append(out.Args, op.ExecuteOptions.Args...)
 		case compiler.FlatOpFor:
 			if op.For.Options.Resume {
 				out.Resume = true
+				if op.For.Options.ResumeTarget != "" {
+					out.ResumeTarget = op.For.Options.ResumeTarget
+				}
+			}
+			if op.For.Options.Fork {
+				out.Fork = true
+				if op.For.Options.ForkTarget != "" {
+					out.ForkTarget = op.For.Options.ForkTarget
+				}
 			}
 			out.Args = append(out.Args, op.For.Options.Args...)
 		case compiler.FlatOpCd:
@@ -1834,7 +1784,18 @@ func uniqueStringsPreserveOrder(values []string) []string {
 func formatTaskRuntimeSummary(runtime Runtime) string {
 	var parts []string
 	if runtime.Resume {
-		parts = append(parts, "resume")
+		if runtime.ResumeTarget != "" {
+			parts = append(parts, "resume="+runtime.ResumeTarget)
+		} else {
+			parts = append(parts, "resume")
+		}
+	}
+	if runtime.Fork {
+		if runtime.ForkTarget != "" {
+			parts = append(parts, "fork="+runtime.ForkTarget)
+		} else {
+			parts = append(parts, "fork")
+		}
 	}
 	if len(runtime.Args) > 0 {
 		parts = append(parts, "args="+strings.Join(runtime.Args, " "))

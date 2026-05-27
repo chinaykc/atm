@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"github.com/chinaykc/atm/pkg/view/plan"
 	"io"
 	"strings"
 
@@ -15,7 +14,9 @@ const (
 )
 
 var supportedSlashCommands = []string{
+	"/task",
 	"/resume",
+	"/fork",
 	"/args",
 	"/cd",
 	"/let",
@@ -23,7 +24,8 @@ var supportedSlashCommands = []string{
 	"/output",
 	"/db",
 	"/skill",
-	"/mcp",
+	"/flag",
+	"/webhook",
 	"/def",
 	"/call",
 	"/return",
@@ -37,52 +39,56 @@ var supportedSlashCommands = []string{
 }
 
 func Run(args []string, stdout, stderr io.Writer) error {
-	command := NewCommand(stdout, stderr)
-	return command.Run(context.Background(), append([]string{appName}, defaultRunArgs(command, args)...))
+	env := newCommandEnv(stdout, stderr)
+	command, normalized, err := newCommandForArgs(env, args)
+	if err != nil {
+		return err
+	}
+	return command.Run(context.Background(), append([]string{appName}, normalized...))
 }
 
-func NewCommand(stdout, stderr io.Writer) *urfavecli.Command {
-	return newCommand(newCommandEnv(stdout, stderr))
+func newCommandForArgs(env commandEnv, args []string) (*urfavecli.Command, []string, error) {
+	dynamic, err := discoverDynamicCommands()
+	if err != nil {
+		return nil, nil, err
+	}
+	command := baseCommand(env, dynamic)
+	normalized := defaultRunArgs(command, args)
+	if err := addDocumentFlagsForArgs(command, normalized); err != nil {
+		return nil, nil, err
+	}
+	return command, normalized, nil
 }
 
-func newCommand(env commandEnv) *urfavecli.Command {
+func baseCommand(env commandEnv, dynamic []dynamicCommand) *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:                  appName,
 		Usage:                 appUsage,
+		Version:               versionString(),
 		Description:           "Supported slash commands: " + strings.Join(supportedSlashCommands, ", "),
-		HideVersion:           true,
 		EnableShellCompletion: true,
 		Suggest:               true,
 		Writer:                env.Stdout,
 		ErrWriter:             env.Stderr,
-		Commands:              rootCommands(env),
+		Commands:              rootCommands(env, dynamic),
 	}
 }
 
-func rootCommands(env commandEnv) []*urfavecli.Command {
-	return []*urfavecli.Command{
-		executeCommand("run", "run pending prompt blocks (also the default command)", false, env),
-		executeCommand("exec", "run pending prompt blocks from the startup snapshot", true, env),
+func rootCommands(env commandEnv, dynamic []dynamicCommand) []*urfavecli.Command {
+	commands := []*urfavecli.Command{
+		executeCommand("run", "run pending prompt blocks (also the default command)", env),
+		resumeCommand(env),
+		flagCommand(env),
 		mcpCommand(env),
 		appendCommand(env),
-		planCommand(env),
 		checkCommand(env.Stdout),
 		reportCommand(env.Stdout),
 		cleanCommand(env.Stdout),
-		repairIDsCommand(env.Stdout),
 		formatCommand(env.Stdout),
-		untagCommand(env.Stdout),
-		webCommand(env),
+		serveCommand(env),
 	}
-}
-
-func planCommand(env commandEnv) *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:            "plan",
-		Usage:           "print a dry-run execution plan",
-		SkipFlagParsing: true,
-		Action: func(_ context.Context, cmd *urfavecli.Command) error {
-			return plan.RunCLI(cmd.Args().Slice(), env.Stdout, env.Stderr)
-		},
+	for _, item := range dynamic {
+		commands = append(commands, dynamicCLICommand(item, env))
 	}
+	return commands
 }

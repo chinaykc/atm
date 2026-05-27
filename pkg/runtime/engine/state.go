@@ -14,9 +14,10 @@ import (
 )
 
 type atmStateFile struct {
-	Version  int                     `json:"version"`
-	Document string                  `json:"document"`
-	Tasks    map[string]atmTaskState `json:"tasks"`
+	Version  int                        `json:"version"`
+	Document string                     `json:"document"`
+	Tasks    map[string]atmTaskState    `json:"tasks"`
+	Sessions map[string]atmSessionState `json:"sessions,omitempty"`
 }
 
 type atmTaskState struct {
@@ -31,6 +32,13 @@ type atmTaskState struct {
 	Report             string   `json:"report,omitempty"`
 	Logs               []string `json:"logs,omitempty"`
 	Orphan             bool     `json:"orphan,omitempty"`
+}
+
+type atmSessionState struct {
+	Tool      string `json:"tool"`
+	ID        string `json:"id"`
+	TaskID    string `json:"taskId,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 type taskStateUpdate struct {
@@ -120,6 +128,86 @@ func (e *Engine) updateTaskState(blockIndex int, update taskStateUpdate) error {
 	return nil
 }
 
+func (e *Engine) updateSessionState(name, tool, sessionID, taskID string, updated time.Time) error {
+	name = strings.TrimSpace(name)
+	sessionID = strings.TrimSpace(sessionID)
+	if name == "" || sessionID == "" {
+		return nil
+	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+
+	path := e.statePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	state := atmStateFile{Version: 2, Document: e.stateDocument(), Tasks: make(map[string]atmTaskState), Sessions: make(map[string]atmSessionState)}
+	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("read state file: %w", err)
+		}
+		if state.Tasks == nil {
+			state.Tasks = make(map[string]atmTaskState)
+		}
+		if state.Sessions == nil {
+			state.Sessions = make(map[string]atmSessionState)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read state file: %w", err)
+	}
+	state.Version = 2
+	state.Document = e.stateDocument()
+	state.Sessions[name] = atmSessionState{
+		Tool:      strings.TrimSpace(tool),
+		ID:        sessionID,
+		TaskID:    strings.TrimSpace(taskID),
+		UpdatedAt: updated.Format(time.RFC3339),
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode state file: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write state file: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) resolveSessionState(name string) (atmSessionState, bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return atmSessionState{}, false, nil
+	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	state, hasState, err := readEngineStateFile(e.statePath())
+	if err != nil || !hasState {
+		return atmSessionState{}, false, err
+	}
+	session, ok := state.Sessions[name]
+	return session, ok, nil
+}
+
+func readEngineStateFile(path string) (atmStateFile, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return atmStateFile{}, false, nil
+		}
+		return atmStateFile{}, false, err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return atmStateFile{}, true, nil
+	}
+	var state atmStateFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		return atmStateFile{}, true, err
+	}
+	return state, true, nil
+}
+
 func (e *Engine) statePath() string {
 	return filepath.Join(e.root, ".atm", "state.json")
 }
@@ -184,19 +272,21 @@ func hashStateText(text string) string {
 
 func hashTaskPlan(task compiler.Task) string {
 	shape := struct {
-		Flow   compiler.FlowNode        `json:"flow"`
-		Output *compiler.OutputSpec     `json:"output,omitempty"`
-		Return *compiler.ReturnSpec     `json:"return,omitempty"`
-		DB     compiler.DBTaskConfig    `json:"db,omitempty"`
-		Skill  compiler.SkillTaskConfig `json:"skill,omitempty"`
-		MCP    compiler.MCPTaskConfig   `json:"mcp,omitempty"`
+		Flow    compiler.FlowNode          `json:"flow"`
+		Output  *compiler.OutputSpec       `json:"output,omitempty"`
+		Return  *compiler.ReturnSpec       `json:"return,omitempty"`
+		DB      compiler.DBTaskConfig      `json:"db,omitempty"`
+		Skill   compiler.SkillTaskConfig   `json:"skill,omitempty"`
+		MCP     compiler.MCPTaskConfig     `json:"mcp,omitempty"`
+		Webhook compiler.WebhookTaskConfig `json:"webhook,omitempty"`
 	}{
-		Flow:   task.Flow,
-		Output: task.Output,
-		Return: task.Return,
-		DB:     task.DB,
-		Skill:  task.Skill,
-		MCP:    task.MCP,
+		Flow:    task.Flow,
+		Output:  task.Output,
+		Return:  task.Return,
+		DB:      task.DB,
+		Skill:   task.Skill,
+		MCP:     task.MCP,
+		Webhook: task.Webhook,
 	}
 	data, err := json.Marshal(shape)
 	if err != nil {

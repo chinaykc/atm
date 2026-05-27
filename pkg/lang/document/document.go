@@ -24,3 +24,7 @@ func MarkdownHeadings(content string) []MarkdownHeading {
 func MarkdownScopeSegment(heading MarkdownHeading) string {
 	return compiler.MarkdownScopeSegment(heading)
 }
+
+func FormatTaskHeaderBody(body string) string {
+	return compiler.FormatTaskHeaderBody(body)
+}

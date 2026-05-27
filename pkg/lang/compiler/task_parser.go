@@ -30,8 +30,22 @@ func parseTask(index int, body string, globals map[string]any, opts CompileOptio
 		return taskAST{}, err
 	}
 	prefixes := slices.Clone(scan.prefixes)
+	var contexts []string
 	if strings.TrimSpace(opts.Context) != "" {
-		prefixes = append([]string{opts.Context}, prefixes...)
+		contexts = append(contexts, strings.TrimSpace(opts.Context))
+	}
+	for _, ref := range t.contextRefs {
+		context := opts.NamedContexts[markdownContextKey(ref)]
+		if strings.TrimSpace(context) == "" {
+			return taskAST{}, fmt.Errorf("task %d: /context requires a known Markdown heading reference: %s", index+1, ref)
+		}
+		if !opts.ContextRefsResolved {
+			contexts = append(contexts, strings.TrimSpace(context))
+		}
+	}
+	if len(contexts) > 0 {
+		t.context = strings.Join(contexts, "\n\n")
+		prefixes = append(contexts, prefixes...)
 	}
 	t.prompt = prependPromptPrefixes(prefixes, strings.Join(lines[scan.promptStart:], ""))
 	if err := validateDBTaskConfig(t.db); err != nil {
@@ -139,6 +153,23 @@ func validateDBTaskConfig(config DBTaskConfig) error {
 
 func parseCommandLineAt(lines []string, index int, vars map[string]any, root string) ([]forAST, commandLineDefaults, int, error) {
 	line := strings.TrimSpace(lines[index])
+	if hasFollowingFence(lines, index) {
+		if err := rejectCombinedFencedPayloadCommand(line); err != nil {
+			return nil, commandLineDefaults{}, index + 1, err
+		}
+		if webhook, next, ok, err := parseWebhookCallAt(lines, index, line); ok || err != nil {
+			if err != nil {
+				return nil, commandLineDefaults{}, next, err
+			}
+			return nil, commandLineDefaults{flow: []astOp{{kind: astOpWebhook, Webhook: webhook}}}, next, nil
+		}
+		if output, next, ok, err := parseOutputAt(lines, index, line); ok || err != nil {
+			if err != nil {
+				return nil, commandLineDefaults{}, next, err
+			}
+			return nil, commandLineDefaults{output: output}, next, nil
+		}
+	}
 	if defaults, next, ok, err := parseBashHeredocCommand(lines, index, line); ok || err != nil {
 		return nil, defaults, next, err
 	}
@@ -151,6 +182,44 @@ func parseCommandLineAt(lines []string, index int, vars map[string]any, root str
 	}
 	steps, defaults, err := parseCommandLine(line, vars, root)
 	return steps, defaults, index + 1, err
+}
+
+func rejectCombinedFencedPayloadCommand(line string) error {
+	fields, err := commandFields(line)
+	if err != nil {
+		return err
+	}
+	for i, field := range fields {
+		switch field {
+		case "/output":
+			if i != 0 || hasCommandFieldAfter(fields, i+1) {
+				return fmt.Errorf("/output with a fenced schema must be written on its own header line")
+			}
+		case "/webhook":
+			if i+1 < len(fields) && fields[i+1] != "new" && fields[i+1] != "use" &&
+				(i != 0 || hasCommandFieldAfter(fields, i+2)) {
+				return fmt.Errorf("/webhook with a fenced payload must be written on its own header line")
+			}
+		}
+	}
+	return nil
+}
+
+func hasCommandFieldAfter(fields []string, start int) bool {
+	for _, field := range fields[start:] {
+		if isCommandToken(field) || isIfCommandToken(field) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFollowingFence(lines []string, index int) bool {
+	if index+1 >= len(lines) {
+		return false
+	}
+	_, ok := parseAnyFenceStart(lines[index+1])
+	return ok || isTildeFenceStart(lines[index+1])
 }
 
 func rewriteFencedNaturalCommandArg(lines []string, index int, line string) (string, int, bool, error) {

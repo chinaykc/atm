@@ -22,6 +22,8 @@ func FlattenFlow(node FlowNode) []FlatOp {
 		ops = append(ops, FlatOp{Kind: FlatOpWait, Pool: node.Pool})
 	case FlowCall:
 		ops = append(ops, FlatOp{Kind: FlatOpCall, Call: node.Call})
+	case FlowWebhook:
+		ops = append(ops, FlatOp{Kind: FlatOpWebhook, Webhook: node.Webhook})
 	case FlowReturn:
 		ops = append(ops, FlatOp{Kind: FlatOpReturn, Return: node.Return})
 	case FlowExecute:

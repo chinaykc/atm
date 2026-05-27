@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -79,14 +80,15 @@ func checkToolDefinition() ToolDefinition {
 					"description": "brief evidence for the decision",
 				},
 			},
-			"required": []string{"passed"},
+			"required":             []string{"passed"},
+			"additionalProperties": false,
 		},
 	}
 }
 
 func recordCheckResult(resultFile string, arguments json.RawMessage) (*mcpsdk.CallToolResult, error) {
-	var result CheckResult
-	if err := json.Unmarshal(arguments, &result); err != nil {
+	result, err := decodeCheckResult(arguments)
+	if err != nil {
 		return nil, err
 	}
 	if err := WriteCheckResult(resultFile, result); err != nil {
@@ -98,6 +100,22 @@ func recordCheckResult(resultFile string, arguments json.RawMessage) (*mcpsdk.Ca
 		status = "PASS"
 	}
 	return textResult("ATM check result recorded: " + status), nil
+}
+
+func decodeCheckResult(arguments json.RawMessage) (CheckResult, error) {
+	var args struct {
+		Passed  *bool  `json:"passed"`
+		Summary string `json:"summary,omitempty"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(arguments)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&args); err != nil {
+		return CheckResult{}, err
+	}
+	if args.Passed == nil {
+		return CheckResult{}, fmt.Errorf("passed is required")
+	}
+	return CheckResult{Passed: *args.Passed, Summary: args.Summary}, nil
 }
 
 func appendDebugLog(result CheckResult) error {

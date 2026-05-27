@@ -1,6 +1,8 @@
 package compiler
 
 import (
+	"encoding/json"
+	langformat "github.com/chinaykc/atm/pkg/lang/format"
 	"github.com/chinaykc/atm/pkg/lang/ir"
 	"github.com/chinaykc/atm/pkg/lang/marker"
 	"os"
@@ -18,6 +20,17 @@ func TestCompileProgramRejectsLegacyPathIterators(t *testing.T) {
 	}
 }
 
+func TestCommandSpecsClassifyKnownSlashCommands(t *testing.T) {
+	for _, token := range []string{"/task", "/resume", "/fork", "/args", "/output", "/db", "/skill", "/mcp", "/webhook", "/cd", "/let", "/bash", "/for", "/if", "/else", "/call", "/go", "/wait", "/return", "/def", "/import", "/pool", "/flag", "/context", "/doc"} {
+		if _, ok := commandTokenSpec(token); !ok {
+			t.Fatalf("expected command spec for %s", token)
+		}
+		if !isCommandToken(token) {
+			t.Fatalf("expected %s to be a command token", token)
+		}
+	}
+}
+
 func TestCompileProgramParsesFilesExpressionIterator(t *testing.T) {
 	plan, err := CompileProgram("todo.txt", "/for file in files()\nreview {{file}}\n")
 	if err != nil {
@@ -29,6 +42,252 @@ func TestCompileProgramParsesFilesExpressionIterator(t *testing.T) {
 	}
 	if ops[0].For.VarName != "file" || ops[0].For.Source.Kind != ConditionExpr || ops[0].For.Source.Text != "files()" {
 		t.Fatalf("unexpected files iterator: %#v", ops[0].For)
+	}
+}
+
+func TestCompileProgramParsesNamedTaskAndResumeTarget(t *testing.T) {
+	plan, err := CompileProgram("todo.txt", "/task review\nReview API.\n\n/resume review\nContinue.\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Tasks) != 2 {
+		t.Fatalf("expected two tasks, got %#v", plan.Tasks)
+	}
+	if plan.Tasks[0].Name != "review" {
+		t.Fatalf("expected named task, got %#v", plan.Tasks[0])
+	}
+	ops := FlattenTaskFlow(plan.Tasks[1])
+	if len(ops) == 0 || !ops[0].ExecuteOptions.Resume || ops[0].ExecuteOptions.ResumeTarget != "review" {
+		t.Fatalf("expected /resume review execute options, got %#v", ops)
+	}
+}
+
+func TestCompileProgramParsesNamedTaskAndForkTarget(t *testing.T) {
+	plan, err := CompileProgram("todo.txt", "/task base\nReview API.\n\n/task branch /fork base\nTry another approach.\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Tasks) != 2 {
+		t.Fatalf("expected two tasks, got %#v", plan.Tasks)
+	}
+	if plan.Tasks[1].Name != "branch" {
+		t.Fatalf("expected fork target task name, got %#v", plan.Tasks[1])
+	}
+	ops := FlattenTaskFlow(plan.Tasks[1])
+	if len(ops) == 0 || !ops[0].ExecuteOptions.Fork || ops[0].ExecuteOptions.ForkTarget != "base" {
+		t.Fatalf("expected /fork base execute options, got %#v", ops)
+	}
+}
+
+func TestCompileProgramParsesTaskAndForkInAnyHeaderOrder(t *testing.T) {
+	cases := []string{
+		"/fork base\n/task branch\nTry another approach.\n",
+		"/task branch\n/fork base\nTry another approach.\n",
+		"/fork base /task branch\nTry another approach.\n",
+		"/task branch /fork base\nTry another approach.\n",
+	}
+	for _, body := range cases {
+		t.Run(strings.ReplaceAll(strings.TrimSpace(strings.Split(body, "\n")[0]), " ", "_"), func(t *testing.T) {
+			plan, err := CompileProgram("todo.txt", "/task base\nReview API.\n\n"+body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Tasks) != 2 {
+				t.Fatalf("expected two tasks, got %#v", plan.Tasks)
+			}
+			if plan.Tasks[1].Name != "branch" {
+				t.Fatalf("expected branch task name, got %#v", plan.Tasks[1])
+			}
+			ops := FlattenTaskFlow(plan.Tasks[1])
+			if len(ops) == 0 || !ops[0].ExecuteOptions.Fork || ops[0].ExecuteOptions.ForkTarget != "base" {
+				t.Fatalf("expected /fork base execute options, got %#v", ops)
+			}
+		})
+	}
+}
+
+func TestTaskHeaderCommandsComposeOnOneLine(t *testing.T) {
+	task, err := ParseTask(0, strings.Join([]string{
+		"/task branch /fork base /output summary /db use main access:write /skill use reviewer /mcp use helper /webhook use notify /args --fast",
+		"Try another approach.",
+	}, "\n"), nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Name != "branch" {
+		t.Fatalf("expected task name, got %#v", task.Name)
+	}
+	if task.Output == nil || task.Output.FileName != "summary" {
+		t.Fatalf("expected output summary, got %#v", task.Output)
+	}
+	if len(task.DB.Use) != 1 || task.DB.Use[0].Names[0] != "main" || task.DB.Use[0].Access != DBAccessWrite {
+		t.Fatalf("unexpected db config: %#v", task.DB)
+	}
+	if len(task.Skill.Use) != 1 || task.Skill.Use[0] != "reviewer" {
+		t.Fatalf("unexpected skill config: %#v", task.Skill)
+	}
+	if len(task.MCP.Use) != 1 || task.MCP.Use[0] != "helper" {
+		t.Fatalf("unexpected mcp config: %#v", task.MCP)
+	}
+	if len(task.Webhook.Use) != 1 || task.Webhook.Use[0] != "notify" {
+		t.Fatalf("unexpected webhook config: %#v", task.Webhook)
+	}
+	ops := FlattenTaskFlow(task)
+	if len(ops) == 0 || !ops[len(ops)-1].ExecuteOptions.Fork || ops[len(ops)-1].ExecuteOptions.ForkTarget != "base" {
+		t.Fatalf("expected fork execute options, got %#v", ops)
+	}
+	if got := ops[len(ops)-1].ExecuteOptions.Args; len(got) != 1 || got[0] != "--fast" {
+		t.Fatalf("expected args on execute, got %#v", got)
+	}
+}
+
+func TestTaskHeaderCommandsOneLineAndMultiLineAreEquivalent(t *testing.T) {
+	oneLine := strings.Join([]string{
+		"/task branch /fork base /output summary /db use main access:write /skill use reviewer /mcp use helper /webhook use notify /args --fast",
+		"Try another approach.",
+	}, "\n")
+	multiLine := strings.Join([]string{
+		"/task branch",
+		"/fork base",
+		"/output summary",
+		"/db use main access:write",
+		"/skill use reviewer",
+		"/mcp use helper",
+		"/webhook use notify",
+		"/args --fast",
+		"Try another approach.",
+	}, "\n")
+	one, err := ParseTask(0, oneLine, nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi, err := ParseTask(0, multiLine, nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneJSON, err := json.Marshal(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiJSON, err := json.Marshal(multi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(oneJSON) != string(multiJSON) {
+		t.Fatalf("expected one-line and multi-line task headers to match\none:   %s\nmulti: %s", oneJSON, multiJSON)
+	}
+}
+
+func TestTaskHeaderCommandLookingArgumentsMustBeQuoted(t *testing.T) {
+	task, err := ParseTask(0, "/bash echo \"/task\" /webhook notify \"mention /task\"\nProceed.\n", nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := FlattenTaskFlow(task)
+	if len(ops) < 3 || ops[0].Bash.Script != "echo /task" || ops[1].Webhook.Message != "mention /task" {
+		t.Fatalf("expected quoted command-looking values to stay arguments, got %#v", ops)
+	}
+	unquoted, err := ParseTask(0, "/bash echo /task\nProceed.\n", nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := FlattenTaskFlow(unquoted)[0].Bash.Script; got != "echo" {
+		t.Fatalf("expected unquoted /task to terminate bash arguments, got %q", got)
+	}
+}
+
+func TestTaskFlowCommandsComposeInOrderOnOneLine(t *testing.T) {
+	task, err := ParseTask(0, strings.Join([]string{
+		"/task branch /cd work /bash echo setup /call prepare arg /webhook notify done /for 2 /go workers",
+		"Try another approach.",
+	}, "\n"), nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := FlattenTaskFlow(task)
+	if len(ops) < 7 {
+		t.Fatalf("expected composed flow ops, got %#v", ops)
+	}
+	if ops[0].Kind != FlatOpCd || ops[0].Cd.Path != "work" {
+		t.Fatalf("expected first op cd, got %#v", ops[0])
+	}
+	if ops[1].Kind != FlatOpBash || ops[1].Bash.Script != "echo setup" {
+		t.Fatalf("expected second op bash, got %#v", ops[1])
+	}
+	if ops[2].Kind != FlatOpCall || ops[2].Call.Name != "prepare" || len(ops[2].Call.Args) != 1 || ops[2].Call.Args[0] != "arg" {
+		t.Fatalf("expected third op call, got %#v", ops[2])
+	}
+	if ops[3].Kind != FlatOpWebhook || ops[3].Webhook.Name != "notify" || ops[3].Webhook.Message != "done" {
+		t.Fatalf("expected fourth op webhook, got %#v", ops[3])
+	}
+	if ops[4].Kind != FlatOpFor || ops[4].For.MaxRuns != 2 {
+		t.Fatalf("expected fifth op for, got %#v", ops[4])
+	}
+	if ops[5].Kind != FlatOpGo || ops[5].Pool != "workers" {
+		t.Fatalf("expected sixth op go, got %#v", ops[5])
+	}
+	if ops[6].Kind != FlatOpExecute {
+		t.Fatalf("expected final execute op, got %#v", ops[6])
+	}
+}
+
+func TestTaskFlowCommandsOneLineAndMultiLineAreEquivalent(t *testing.T) {
+	oneLine := strings.Join([]string{
+		"/task branch /cd work /bash echo setup /call prepare arg /webhook notify done /for 2 /go workers",
+		"Try another approach.",
+	}, "\n")
+	multiLine := strings.Join([]string{
+		"/task branch",
+		"/cd work",
+		"/bash echo setup",
+		"/call prepare arg",
+		"/webhook notify done",
+		"/for 2",
+		"/go workers",
+		"Try another approach.",
+	}, "\n")
+	one, err := ParseTask(0, oneLine, nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi, err := ParseTask(0, multiLine, nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneJSON, err := json.Marshal(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiJSON, err := json.Marshal(multi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(oneJSON) != string(multiJSON) {
+		t.Fatalf("expected one-line and multi-line flow headers to match\none:   %s\nmulti: %s", oneJSON, multiJSON)
+	}
+}
+
+func TestLetCommandComposesOnOneLine(t *testing.T) {
+	task, err := ParseTask(0, "/let notes Review docs /task branch /fork base\nUse {{notes}}.\n", nil, CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Name != "branch" {
+		t.Fatalf("expected task name, got %#v", task.Name)
+	}
+	if task.Vars["notes"] != "Review docs" || !strings.Contains(task.Prompt, "Use {{notes}}.") {
+		t.Fatalf("expected let variable and prompt, vars=%#v prompt=%q", task.Vars, task.Prompt)
+	}
+	ops := FlattenTaskFlow(task)
+	if len(ops) == 0 || !ops[len(ops)-1].ExecuteOptions.Fork || ops[len(ops)-1].ExecuteOptions.ForkTarget != "base" {
+		t.Fatalf("expected fork execute options, got %#v", ops)
+	}
+}
+
+func TestCompileProgramRejectsBareResume(t *testing.T) {
+	_, err := CompileProgram("todo.txt", "/resume\nContinue.\n")
+	if err == nil || !strings.Contains(err.Error(), "/resume requires a task name") {
+		t.Fatalf("expected /resume task name error, got %v", err)
 	}
 }
 
@@ -102,10 +361,10 @@ func TestPlanPreservesForGoOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != "For(n in [0 1]) -> Go -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != "For(n in [0 1]) -> Go -> Execute" {
 		t.Fatalf("unexpected /for /go flow: %s", got)
 	}
-	if got := FormatTaskFlow(plan.Tasks[1]); got != "Go -> For(n in [0 1]) -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[1]); got != "Go -> For(n in [0 1]) -> Execute" {
 		t.Fatalf("unexpected /go /for flow: %s", got)
 	}
 }
@@ -150,7 +409,7 @@ func TestFlattenTaskFlowUsesFlowAsPrimaryIR(t *testing.T) {
 			}},
 		}},
 	}
-	if got := FormatTaskFlow(task); got != "For(area in [api docs]) -> Go(review) -> Execute" {
+	if got := langformat.TaskFlow(task); got != "For(area in [api docs]) -> Go(review) -> Execute" {
 		t.Fatalf("expected flow-backed formatting, got %q", got)
 	}
 	ops := FlattenTaskFlow(task)
@@ -164,10 +423,10 @@ func TestCdCommandParsesAsOrderedFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != "For(area in [api docs]) -> Cd(work/{{area}}) -> Go -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != "For(area in [api docs]) -> Cd(work/{{area}}) -> Go -> Execute" {
 		t.Fatalf("unexpected /cd flow: %s", got)
 	}
-	if got := FormatTaskFlow(plan.Tasks[1]); got != "Cd(backend, must-exist) -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[1]); got != "Cd(backend, must-exist) -> Execute" {
 		t.Fatalf("unexpected /cd --must-exist flow: %s", got)
 	}
 }
@@ -181,7 +440,7 @@ func TestCommandLexerSupportsQuotedArgsPathsAndListItems(t *testing.T) {
 		t.Fatalf("expected one task, got %#v", plan.Tasks)
 	}
 	task := plan.Tasks[0]
-	if got := FormatTaskFlow(task); got != "For(area in [api docs tests]) [args=--model fast lane] -> Cd(work/{{area}}) -> Go -> Execute" {
+	if got := langformat.TaskFlow(task); got != "For(area in [api docs tests]) [args=--model fast lane] -> Cd(work/{{area}}) -> Go -> Execute" {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 	ops := FlattenTaskFlow(task)
@@ -214,7 +473,7 @@ func TestComposableIfCommandFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := FormatTaskFlow(task); got != `For(n x 10) -> If(expr:n % 2 == 0) -> Go(even) -> Execute` {
+	if got := langformat.TaskFlow(task); got != `For(n x 10) -> If(expr:n % 2 == 0) -> Go(even) -> Execute` {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 	flow := task.Flow.Children[0]
@@ -263,7 +522,7 @@ func TestComposableIfUsesFollowingElseBlockAsSameTask(t *testing.T) {
 	if len(plan.Controls) != 0 {
 		t.Fatalf("expected merged else not to appear as standalone control, got %#v", plan.Controls)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != `For(n in [0 1]) -> If(expr:n == 0) {then: Execute; else: Execute}` {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != `For(n in [0 1]) -> If(expr:n == 0) {then: Execute; else: Execute}` {
 		t.Fatalf("unexpected merged if/else flow: %s", got)
 	}
 }
@@ -315,7 +574,7 @@ func TestForUntilExprAndUnboundedExprParse(t *testing.T) {
 	if second.MaxRuns != 0 || second.VarName != "n" || second.Condition.Kind != ConditionExpr || second.Condition.Text != "json(open(\"gate.json\")).passed" {
 		t.Fatalf("unexpected unbounded expression loop: %#v", second)
 	}
-	if got := FormatTaskFlow(plan.Tasks[1]); got != "For(n until expr(\"json(open(\\\"gate.json\\\")).passed\")) -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[1]); got != "For(n until expr(\"json(open(\\\"gate.json\\\")).passed\")) -> Execute" {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 }
@@ -768,7 +1027,7 @@ func TestDynamicForSourceParsesAsExpr(t *testing.T) {
 	if loop.VarName != "area" || loop.Source.Kind != ConditionExpr || loop.Source.Text != `json(open(outputDir("release-plan.json"))).areas` {
 		t.Fatalf("unexpected dynamic loop: %#v", loop)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != `For(area in expr("json(open(outputDir(\"release-plan.json\"))).areas")) -> Go(reviewer) -> Execute` {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != `For(area in expr("json(open(outputDir(\"release-plan.json\"))).areas")) -> Go(reviewer) -> Execute` {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 }
@@ -782,7 +1041,7 @@ func TestDynamicForSourceParsesRangeExpr(t *testing.T) {
 	if loop.VarName != "shard" || loop.Source.Kind != ConditionExpr || loop.Source.Text != `range(1, 4)` {
 		t.Fatalf("unexpected dynamic loop: %#v", loop)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != `For(shard in expr("range(1, 4)")) -> Execute` {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != `For(shard in expr("range(1, 4)")) -> Execute` {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 }
@@ -796,7 +1055,7 @@ func TestDynamicForSourceParsesCall(t *testing.T) {
 	if loop.VarName != "plan" || loop.Source.Kind != ConditionCall || loop.Source.Text != `/call plan_shards` {
 		t.Fatalf("unexpected call loop: %#v", loop)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != `For(plan in call("/call plan_shards")) -> Go(reviewer) -> Execute` {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != `For(plan in call("/call plan_shards")) -> Go(reviewer) -> Execute` {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 }
@@ -877,7 +1136,7 @@ func TestIfAndElseCommandsAreBlockLevelNoOpsInTaskIR(t *testing.T) {
 	if strings.TrimSpace(task.Prompt) != "Continue." {
 		t.Fatalf("unexpected prompt: %q", task.Prompt)
 	}
-	if got := FormatTaskFlow(task); got != `If(expr:exist("gate.json")) -> Execute` {
+	if got := langformat.TaskFlow(task); got != `If(expr:exist("gate.json")) -> Execute` {
 		t.Fatalf("unexpected if flow: %s", got)
 	}
 	ifBlock, ok, err := ParseIfBlock("/if (exist(\"gate.json\"))\nContinue.\n")
@@ -907,7 +1166,7 @@ func TestIfAndElseCommandsAreBlockLevelNoOpsInTaskIR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := FormatTaskFlow(task); got != "If(expr:true) -> Execute [args=--yolo]" {
+	if got := langformat.TaskFlow(task); got != "If(expr:true) -> Execute [args=--yolo]" {
 		t.Fatalf("unexpected modifier + if flow: %s", got)
 	}
 }
@@ -952,10 +1211,10 @@ func TestPoolDeclarationsAndNamedGoWait(t *testing.T) {
 	if len(plan.Pools) != 1 || plan.Pools[0].Name != "tester" || plan.Pools[0].Max != 5 || plan.Pools[0].Buffer != 10 {
 		t.Fatalf("unexpected pool declarations: %#v", plan.Pools)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != "Go(tester) -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != "Go(tester) -> Execute" {
 		t.Fatalf("unexpected named /go flow: %s", got)
 	}
-	if got := FormatTaskFlow(plan.Tasks[1]); got != "Wait(tester) -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[1]); got != "Wait(tester) -> Execute" {
 		t.Fatalf("unexpected named /wait flow: %s", got)
 	}
 }
@@ -1106,7 +1365,7 @@ func TestWaitWithPromptFormatsAsWaitAgent(t *testing.T) {
 	if len(plan.Tasks) != 2 {
 		t.Fatalf("expected go task plus wait agent task, got %#v", plan.Tasks)
 	}
-	if got := FormatTaskFlow(plan.Tasks[1]); got != "WaitAgent" {
+	if got := langformat.TaskFlow(plan.Tasks[1]); got != "WaitAgent" {
 		t.Fatalf("unexpected /wait prompt flow: %s", got)
 	}
 }
@@ -1317,7 +1576,7 @@ func TestSkillMCPAndDefMCPParse(t *testing.T) {
 		t.Fatalf("expected one runnable task, got %#v", plan.Tasks)
 	}
 	task := plan.Tasks[0]
-	if got := FormatTaskFlow(task); got != "Cd(work) -> Execute" {
+	if got := langformat.TaskFlow(task); got != "Cd(work) -> Execute" {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 	if len(task.Skill.Use) != 1 || task.Skill.Use[0] != "release_reviewer" {
@@ -1576,7 +1835,7 @@ func TestOutputCommandCanAppearBetweenFlowCommandsAndPrompt(t *testing.T) {
 	if task.Output == nil || task.Output.FileName != "result-{{n}}" {
 		t.Fatalf("unexpected output spec: %#v", task.Output)
 	}
-	if got := FormatTaskFlow(task); got != "For(n in [0 1]) -> Go -> Execute" {
+	if got := langformat.TaskFlow(task); got != "For(n in [0 1]) -> Go -> Execute" {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 	if strings.TrimSpace(task.Prompt) != "Summarize {{n}}." {
@@ -1674,6 +1933,20 @@ func TestOutputCommandRejectsDuplicateOutput(t *testing.T) {
 	}
 }
 
+func TestFencedPayloadCommandsRequireTheirOwnHeaderLine(t *testing.T) {
+	for _, body := range []string{
+		"/task named /output result\n```schema\nreason:string:why\n```\nReport.\n",
+		"/task named /webhook notify\n```json\n{\"text\":\"done\"}\n```\nReport.\n",
+		"/output result /task named\n```schema\nreason:string:why\n```\nReport.\n",
+		"/webhook notify /task named\n```json\n{\"text\":\"done\"}\n```\nReport.\n",
+	} {
+		_, err := ParseTask(0, body, nil, CompileOptions{Root: "."})
+		if err == nil || !strings.Contains(err.Error(), "must be written on its own header line") {
+			t.Fatalf("expected fenced payload own-line diagnostic for %q, got %v", body, err)
+		}
+	}
+}
+
 func TestMarkdownHeadingsProvideContextAndCommandsStartTasks(t *testing.T) {
 	content := `# Release notes
 
@@ -1755,7 +2028,7 @@ func TestRootMarkdownCommandStartsTaskWithoutHeading(t *testing.T) {
 	if len(plan.Tasks) != 1 {
 		t.Fatalf("expected one task, got %#v", plan.Tasks)
 	}
-	if got := FormatTaskFlow(plan.Tasks[0]); got != "For(n in [0 1 2]) -> Execute" {
+	if got := langformat.TaskFlow(plan.Tasks[0]); got != "For(n in [0 1 2]) -> Execute" {
 		t.Fatalf("unexpected flow: %s", got)
 	}
 	if got := plan.Tasks[0].Prompt; got != "审计当前项目。\n" {
@@ -1784,8 +2057,8 @@ Review the change.
 	if len(blocks) != 1 {
 		t.Fatalf("expected one task block, got %#v", blocks)
 	}
-	if strings.Contains(blocks[0].Body, "/context") {
-		t.Fatalf("expected /context header to be removed from task body: %q", blocks[0].Body)
+	if !strings.Contains(blocks[0].Body, "/context #Shared Rules") {
+		t.Fatalf("expected /context header to remain in source block: %q", blocks[0].Body)
 	}
 	for _, want := range []string{"# Work", "Local context.", "# Shared Rules", "Use the release checklist."} {
 		if !strings.Contains(blocks[0].Context, want) {
@@ -1799,8 +2072,51 @@ Review the change.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Tasks) != 1 || !strings.Contains(plan.Tasks[0].Prompt, "Use the release checklist.") || strings.Contains(plan.Tasks[0].Prompt, "/context") {
+	if len(plan.Tasks) != 1 || len(plan.Tasks[0].ContextRefs) != 1 || plan.Tasks[0].ContextRefs[0] != "Shared Rules" ||
+		!strings.Contains(plan.Tasks[0].Context, "Use the release checklist.") ||
+		!strings.Contains(plan.Tasks[0].Prompt, "Use the release checklist.") || strings.Contains(plan.Tasks[0].Prompt, "/context") {
 		t.Fatalf("expected compiled prompt to include explicit context without command line, got %#v", plan.Tasks)
+	}
+}
+
+func TestMarkdownContextCommandComposesWithinTaskHeaderLine(t *testing.T) {
+	content := `# Shared Rules
+
+Use the release checklist.
+
+# Work
+
+Local context.
+
+/context #Shared Rules /task review /args "--fast lane"
+Review the change.
+`
+	blocks := ParseBlocks(content)
+	if len(blocks) != 1 {
+		t.Fatalf("expected one task block, got %#v", blocks)
+	}
+	if !strings.Contains(blocks[0].Body, `/context #Shared Rules /task review /args "--fast lane"`) {
+		t.Fatalf("expected composed task header to remain in source block, got %q", blocks[0].Body)
+	}
+	for _, want := range []string{"# Work", "Local context.", "# Shared Rules", "Use the release checklist."} {
+		if !strings.Contains(blocks[0].Context, want) {
+			t.Fatalf("expected context to contain %q, got:\n%s", want, blocks[0].Context)
+		}
+	}
+	plan, err := CompileProgram("todo.md", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Tasks) != 1 || plan.Tasks[0].Name != "review" {
+		t.Fatalf("expected named task, got %#v", plan.Tasks)
+	}
+	ops := FlattenTaskFlow(plan.Tasks[0])
+	if len(ops) == 0 || len(ops[len(ops)-1].ExecuteOptions.Args) != 1 || ops[len(ops)-1].ExecuteOptions.Args[0] != "--fast lane" {
+		t.Fatalf("expected args from composed context line, got %#v", ops)
+	}
+	if len(plan.Tasks[0].ContextRefs) != 1 || plan.Tasks[0].ContextRefs[0] != "Shared Rules" ||
+		!strings.Contains(plan.Tasks[0].Prompt, "Use the release checklist.") || strings.Contains(plan.Tasks[0].Prompt, "/context") {
+		t.Fatalf("expected prompt to include explicit context without /context, got %q", plan.Tasks[0].Prompt)
 	}
 }
 
@@ -1814,6 +2130,21 @@ Review the change.
 	_, err := CompileProgram("todo.md", content)
 	if err == nil || !strings.Contains(err.Error(), "/context requires a known Markdown heading reference") {
 		t.Fatalf("expected missing context command to reach validation, got %v", err)
+	}
+}
+
+func TestAlreadyResolvedContextReferencesAreNotInjectedTwice(t *testing.T) {
+	task, err := ParseTask(0, "/context #Shared\nDo it.\n", nil, CompileOptions{
+		Root:                ".",
+		Context:             "# Work\nLocal.\n\n# Shared\nRules.",
+		NamedContexts:       map[string]string{"shared": "# Shared\nRules."},
+		ContextRefsResolved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(task.Prompt, "Rules.") != 1 {
+		t.Fatalf("resolved context was injected again:\n%s", task.Prompt)
 	}
 }
 

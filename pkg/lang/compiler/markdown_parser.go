@@ -57,9 +57,10 @@ func parseMarkdownTaskBlocks(content string, _ []string) []Block {
 		start := offsets[blockStart]
 		end := offsets[endLine]
 		body, sep := splitTrailingBlankLines(content[start:end])
-		body, explicitContext := extractMarkdownContextRefs(body, contexts)
 		if strings.TrimSpace(body) != "" {
-			context := strings.TrimSpace(blockContext)
+			localContext := strings.TrimSpace(blockContext)
+			context := localContext
+			explicitContext := resolveMarkdownContextRefs(body, contexts)
 			if strings.TrimSpace(explicitContext) != "" {
 				if context != "" {
 					context += "\n\n"
@@ -67,14 +68,16 @@ func parseMarkdownTaskBlocks(content string, _ []string) []Block {
 				context += strings.TrimSpace(explicitContext)
 			}
 			blocks = append(blocks, Block{
-				Prefix:      content[prefixStart:start],
-				Body:        body,
-				Sep:         sep,
-				Context:     context,
-				Scope:       markdownScopePath(headings),
-				StartLine:   blockStart + 1,
-				HasParent:   blockHasParent,
-				ParentIndex: blockParentIndex,
+				Prefix:        content[prefixStart:start],
+				Body:          body,
+				Sep:           sep,
+				Context:       context,
+				LocalContext:  localContext,
+				NamedContexts: contexts,
+				Scope:         markdownScopePath(headings),
+				StartLine:     blockStart + 1,
+				HasParent:     blockHasParent,
+				ParentIndex:   blockParentIndex,
 			})
 		}
 		prefixStart = end
@@ -546,82 +549,70 @@ func markdownSectionContextMap(lines []string) map[string]string {
 	return contexts
 }
 
-func extractMarkdownContextRefs(body string, contexts map[string]string) (string, string) {
+func resolveMarkdownContextRefs(body string, contexts map[string]string) string {
 	lines := SplitLines(body)
-	var out strings.Builder
 	var extra strings.Builder
 	header := true
-	outputFence := outputFenceInfo{}
-	outputFencePending := false
+	fence := outputFenceInfo{}
+	fencePending := false
 	heredocDelim := ""
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !header {
-			out.WriteString(line)
 			continue
 		}
-		if outputFence.marker != "" {
-			out.WriteString(line)
-			if isFenceClose(line, outputFence) {
-				outputFence = outputFenceInfo{}
+		if fence.marker != "" {
+			if isFenceClose(line, fence) {
+				fence = outputFenceInfo{}
 			}
 			continue
 		}
-		if outputFencePending {
-			out.WriteString(line)
-			if fence, ok := parseAnyFenceStart(line); ok {
-				outputFence = fence
+		if fencePending {
+			if parsed, ok := parseAnyFenceStart(line); ok {
+				fence = parsed
 			}
-			outputFencePending = false
+			fencePending = false
 			continue
 		}
 		if heredocDelim != "" {
-			out.WriteString(line)
 			if trimmed == heredocDelim {
 				heredocDelim = ""
 			}
 			continue
 		}
-		if strings.TrimSpace(line) == "" {
-			out.WriteString(line)
-			continue
-		}
-		if ref, ok := parseContextLine(trimmed); ok {
-			if ctx := contexts[markdownContextKey(ref)]; strings.TrimSpace(ctx) != "" {
-				if extra.Len() > 0 {
-					extra.WriteString("\n\n")
-				}
-				extra.WriteString(ctx)
-				continue
-			}
-			out.WriteString(line)
+		if trimmed == "" {
 			continue
 		}
 		if !strings.HasPrefix(trimmed, "/") {
 			header = false
-			out.WriteString(line)
 			continue
 		}
-		out.WriteString(line)
+		fields, err := commandFields(trimmed)
+		if err != nil {
+			continue
+		}
+		for i := 0; i < len(fields); i++ {
+			if fields[i] != "/context" {
+				continue
+			}
+			args, next := collectCommandArgs(fields, i+1)
+			ref := strings.TrimLeft(strings.TrimSpace(strings.Join(args, " ")), "# \t")
+			if context := contexts[markdownContextKey(ref)]; strings.TrimSpace(context) != "" {
+				if extra.Len() > 0 {
+					extra.WriteString("\n\n")
+				}
+				extra.WriteString(strings.TrimSpace(context))
+			}
+			i = next - 1
+		}
 		if startsFencedPayloadCommand(trimmed) {
-			outputFencePending = true
+			fencePending = true
 		}
 		if delim, ok := lineHeredocDelimiter(trimmed); ok {
 			heredocDelim = delim
 		}
 	}
-	return out.String(), extra.String()
-}
-
-func parseContextLine(line string) (string, bool) {
-	if line == "/context" {
-		return "", true
-	}
-	if !strings.HasPrefix(line, "/context ") {
-		return "", false
-	}
-	ref := strings.TrimSpace(strings.TrimPrefix(line, "/context"))
-	return strings.TrimLeft(strings.TrimSpace(ref), "# \t"), true
+	return extra.String()
 }
 
 func parseDocBlock(lines []string, index int) (int, bool) {
@@ -665,7 +656,7 @@ func isMarkdownV2BlockStartLine(line string) bool {
 	}
 	token := firstField(line)
 	switch token {
-	case "/task", "/for", "/go", "/resume", "/args", "/cd", "/call", "/bash", "/wait", "/if", "/else", "/output", "/return", "/def", "/import", "/pool", "/let", "/db", "/skill", "/mcp", "/context", "/doc":
+	case "/task", "/for", "/go", "/resume", "/fork", "/args", "/cd", "/call", "/webhook", "/bash", "/wait", "/if", "/else", "/output", "/return", "/def", "/import", "/pool", "/let", "/db", "/skill", "/mcp", "/flag", "/context", "/doc":
 		return true
 	default:
 		return isIfCommandToken(token)
@@ -678,8 +669,10 @@ func isMarkdownV2SingleLineGlobal(line string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/pool", "/import":
+	case "/pool", "/import", "/flag":
 		return true
+	case "/webhook":
+		return len(fields) >= 2 && fields[1] == "new"
 	case "/skill":
 		return len(fields) >= 2 && (fields[1] == "new" || fields[1] == "ignore")
 	default:
@@ -707,6 +700,12 @@ func isCompleteMarkdownGlobalDeclaration(body string) bool {
 		return true
 	}
 	if _, ok, err := ParseGlobalMCPBlock(body); ok && err == nil {
+		return true
+	}
+	if _, ok, err := ParseGlobalFlagBlock(body); ok && err == nil {
+		return true
+	}
+	if _, ok, err := ParseGlobalWebhookBlock(body); ok && err == nil {
 		return true
 	}
 	return false

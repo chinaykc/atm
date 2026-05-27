@@ -52,8 +52,12 @@ func TestLockUsesATMDirectoryLockFile(t *testing.T) {
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".atm", "lock")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected lock removed, stat err=%v", err)
+	next, err := Lock(file)
+	if err != nil {
+		t.Fatalf("expected released lock to be available: %v", err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

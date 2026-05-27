@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/chinaykc/atm/pkg/lang/compiler"
 	"github.com/chinaykc/atm/pkg/lang/document"
+	"github.com/chinaykc/atm/pkg/view/plan"
 	"io"
 	"os"
 	"slices"
@@ -15,11 +16,14 @@ import (
 func checkCommand(stdout io.Writer) *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:      "check",
-		Usage:     "compile and validate todo files without running them",
+		Usage:     "compile and validate ATM files without running them",
 		ArgsUsage: "[files...]",
 		Flags: []urfavecli.Flag{
-			todoFilesFlag(),
 			&urfavecli.BoolFlag{Name: "json", Usage: "print validation summary as JSON"},
+			&urfavecli.BoolFlag{Name: "plan", Usage: "print the dry-run execution plan"},
+			&urfavecli.BoolFlag{Name: "preview", Usage: "execute previewable lazy providers and include preview values with --plan"},
+			&urfavecli.StringFlag{Name: "html", Usage: "write a plan HTML flowchart to this file"},
+			&urfavecli.BoolFlag{Name: "open", Usage: "open a temporary plan HTML flowchart"},
 		},
 		Action: func(_ context.Context, cmd *urfavecli.Command) error {
 			return runCheckCommand(cmd, stdout)
@@ -28,7 +32,10 @@ func checkCommand(stdout io.Writer) *urfavecli.Command {
 }
 
 func runCheckCommand(cmd *urfavecli.Command, stdout io.Writer) error {
-	checkFiles, err := resolveRunFiles(commandFiles(cmd), cmd.Args().Slice())
+	if cmd.Bool("plan") || cmd.Bool("preview") || cmd.String("html") != "" || cmd.Bool("open") {
+		return runCheckPlanCommand(cmd, stdout)
+	}
+	checkFiles, err := resolveRunFiles(cmd.Args().Slice())
 	if err != nil {
 		return err
 	}
@@ -64,6 +71,28 @@ func runCheckCommand(cmd *urfavecli.Command, stdout io.Writer) error {
 	return nil
 }
 
+func runCheckPlanCommand(cmd *urfavecli.Command, stdout io.Writer) error {
+	checkFiles, err := resolveRunFiles(cmd.Args().Slice())
+	if err != nil {
+		return err
+	}
+	if len(checkFiles) != 1 {
+		return fmt.Errorf("check --plan accepts exactly one ATM file")
+	}
+	if cmd.Bool("json") && (cmd.String("html") != "" || cmd.Bool("open")) {
+		return fmt.Errorf("--json cannot be combined with --html or --open")
+	}
+	if cmd.Bool("preview") && (cmd.String("html") != "" || cmd.Bool("open")) {
+		return fmt.Errorf("--preview cannot be combined with --html or --open")
+	}
+	return plan.RunFile(checkFiles[0], stdout, plan.Options{
+		JSON:    cmd.Bool("json"),
+		HTML:    cmd.String("html"),
+		Open:    cmd.Bool("open"),
+		Preview: cmd.Bool("preview"),
+	})
+}
+
 func printCheckResults(stdout io.Writer, results []checkResult) {
 	for _, result := range results {
 		fmt.Fprintf(stdout, "atm check ok: %s\n", result.File)
@@ -93,7 +122,7 @@ type checkResult struct {
 func checkFile(file string) (checkResult, error) {
 	content, err := os.ReadFile(file)
 	if err != nil {
-		return checkResult{}, fmt.Errorf("read todo file %q: %w", file, err)
+		return checkResult{}, fmt.Errorf("read ATM file %q: %w", file, err)
 	}
 	source := string(content)
 	plan, err := compiler.CompileProgram(file, source)
@@ -108,7 +137,7 @@ func checkFile(file string) (checkResult, error) {
 func checkFileDiagnostics(file string) checkResult {
 	content, err := os.ReadFile(file)
 	if err != nil {
-		return checkResult{File: file, Diagnostics: []compiler.Diagnostic{{Severity: "error", Source: file, Message: fmt.Sprintf("read todo file %q: %v", file, err)}}}
+		return checkResult{File: file, Diagnostics: []compiler.Diagnostic{{Severity: "error", Source: file, Message: fmt.Sprintf("read ATM file %q: %v", file, err)}}}
 	}
 	source := string(content)
 	plan, diagnostics := compiler.CompileProgramDiagnostics(file, source)

@@ -132,7 +132,7 @@ func TestCodexCheckArgsCanUseHTTPMCPServer(t *testing.T) {
 
 func TestCodexExecuteArgsIncludeExternalAndDefsMCP(t *testing.T) {
 	opts := ir.RunOptions{
-		MCPs:   []ir.MCPRuntime{{Name: "helper", Config: `{"command":"helper","args":["--serve"],"env":{"A":"B"}}`}},
+		MCPs:   []ir.MCPRuntime{{Name: "helper", Config: `{"command":"helper","args":["--serve"],"env":{"A":"B"}}`, ApprovedTools: []string{"notify"}}},
 		DefMCP: &ir.DefMCPRuntime{Definitions: []string{"echo"}},
 	}
 	args := strings.Join(codexArgs(opts, "", "", "", "/tmp/defs.json", false), "\n")
@@ -141,12 +141,166 @@ func TestCodexExecuteArgsIncludeExternalAndDefsMCP(t *testing.T) {
 		!strings.Contains(args, `mcp_servers.helper.env.A="B"`) {
 		t.Fatalf("missing external mcp config:\n%s", args)
 	}
+	if !strings.Contains(args, `mcp_servers.helper.tools.notify.approval_mode="approve"`) {
+		t.Fatalf("missing approved external mcp tool config:\n%s", args)
+	}
 	if !strings.Contains(args, "mcp_servers.atm_defs.command=") ||
 		!strings.Contains(args, `mcp_servers.atm_defs.args=["mcp", "defs", "-config-file", "/tmp/defs.json"]`) {
 		t.Fatalf("missing defs mcp config:\n%s", args)
 	}
 	if !strings.Contains(args, `mcp_servers.atm_defs.tools.atm_def_echo.approval_mode="approve"`) {
 		t.Fatalf("missing defs mcp approval config:\n%s", args)
+	}
+}
+
+func TestCodexResumeArgsUseSpecificSession(t *testing.T) {
+	args := strings.Join(codexArgs(ir.RunOptions{Resume: true, ResumeSessionID: "thread_1"}, "", "", "", "", false), "\n")
+	if !strings.Contains(args, "resume\nthread_1") || strings.Contains(args, "--last") {
+		t.Fatalf("unexpected codex resume args:\n%s", args)
+	}
+}
+
+func TestCodexForkExecuteMaterializesSessionAndRunsExecResume(t *testing.T) {
+	requireShell(t)
+
+	dir := t.TempDir()
+	workdir := filepath.Join(dir, "work")
+	if err := os.Mkdir(workdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codexHome := filepath.Join(dir, "codex-home")
+	parentID := "019e6994-b038-7011-be84-de68bff950f3"
+	parentDir := filepath.Join(codexHome, "sessions", "2026", "05", "27")
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parentPath := filepath.Join(parentDir, "rollout-2026-05-27T21-16-52-"+parentID+".jsonl")
+	parent := `{"timestamp":"2026-05-27T13:16:52.000Z","type":"session_meta","payload":{"id":"` + parentID + `","timestamp":"2026-05-27T13:16:52.000Z","cwd":"/parent/work","originator":"codex_cli_rs","cli_version":"0.134.0","source":"cli","model_provider":"codex","base_instructions":{"text":"base"}}}
+{"timestamp":"2026-05-27T13:16:53.000Z","type":"event_msg","payload":{"type":"user_message","message":"parent prompt","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-05-27T13:16:54.000Z","type":"event_msg","payload":{"type":"agent_message","message":"parent done"}}
+`
+	if err := os.WriteFile(parentPath, []byte(parent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeCodex := filepath.Join(dir, "codex")
+	argsLog := filepath.Join(dir, "args.log")
+	promptLog := filepath.Join(dir, "prompt.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" > "$ARGS_LOG"
+cat > "$PROMPT_LOG"
+case "$*" in
+  *"exec --json resume"*) ;;
+  *) exit 6 ;;
+esac
+session=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "resume" ]; then
+    session="$arg"
+    break
+  fi
+  prev="$arg"
+done
+if [ -z "$session" ]; then
+  exit 7
+fi
+printf '{"type":"thread.started","thread_id":"%s"}\n' "$session"
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"fork done"}}\n'
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("ARGS_LOG", argsLog)
+	t.Setenv("PROMPT_LOG", promptLog)
+
+	runner := codexRunner{path: fakeCodex}
+	var stdout bytes.Buffer
+	result, err := runner.Execute(context.Background(), filepath.Join(dir, "todo.txt"), "prompt", ir.RunOptions{Fork: true, ResumeSessionID: parentID, Workdir: workdir}, &stdout, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionID == "" || result.SessionID == parentID {
+		t.Fatalf("expected new forked session id, got %q", result.SessionID)
+	}
+	if len(result.Messages) != 1 || result.Messages[0].Text != "fork done" {
+		t.Fatalf("unexpected messages: %#v", result.Messages)
+	}
+	if !strings.Contains(stdout.String(), result.SessionID) || !strings.Contains(stdout.String(), "fork done") {
+		t.Fatalf("unexpected rendered output:\n%s", stdout.String())
+	}
+	prompt, err := os.ReadFile(promptLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(prompt)) != "prompt" {
+		t.Fatalf("unexpected prompt: %q", prompt)
+	}
+	forkPath, meta, ok, err := findCodexSessionByID(codexHome, result.SessionID)
+	if err != nil || !ok {
+		t.Fatalf("expected materialized fork path, ok=%v err=%v", ok, err)
+	}
+	if meta.ForkedFromID != parentID {
+		t.Fatalf("expected forked_from_id %q, got %#v", parentID, meta)
+	}
+	if !samePath(meta.Cwd, workdir) {
+		t.Fatalf("expected fork cwd %q, got %q", workdir, meta.Cwd)
+	}
+	forkData, err := os.ReadFile(forkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(forkData), `"message":"parent done"`) {
+		t.Fatalf("expected parent rollout history to be copied:\n%s", forkData)
+	}
+}
+
+func TestCodexForkSnapshotDropsPartialTailAndMarksInterruptedTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := strings.Join([]string{
+		`{"timestamp":"2026-05-27T13:16:52.000Z","type":"session_meta","payload":{"id":"019e6994-b038-7011-be84-de68bff950f3","timestamp":"2026-05-27T13:16:52.000Z","cwd":"/work"}}`,
+		`{"timestamp":"2026-05-27T13:16:53.000Z","type":"event_msg","payload":{"type":"turn_started","turn_id":"turn-1"}}`,
+		`{"timestamp":"2026-05-27T13:16:54.000Z","type":"event_msg","payload":{"type":"user_message","message":"parent prompt"}}`,
+		`{"timestamp":"2026-05-27T13:16:55.000Z","type":"event_msg","payload":{"type":"agent_message","message":"partial`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := readCodexForkSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(snapshot)
+	if strings.Contains(text, "agent_message") {
+		t.Fatalf("expected invalid trailing partial line to be dropped:\n%s", text)
+	}
+	if !strings.Contains(text, `"type":"turn_aborted"`) ||
+		!strings.Contains(text, `"turn_id":"turn-1"`) ||
+		!strings.Contains(text, `turn_aborted`) {
+		t.Fatalf("expected interrupted boundary in snapshot:\n%s", text)
+	}
+}
+
+func TestCodexForkSnapshotKeepsCompletedTurnUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	content := strings.Join([]string{
+		`{"timestamp":"2026-05-27T13:16:52.000Z","type":"session_meta","payload":{"id":"019e6994-b038-7011-be84-de68bff950f3","timestamp":"2026-05-27T13:16:52.000Z","cwd":"/work"}}`,
+		`{"timestamp":"2026-05-27T13:16:53.000Z","type":"event_msg","payload":{"type":"turn_started","turn_id":"turn-1"}}`,
+		`{"timestamp":"2026-05-27T13:16:54.000Z","type":"event_msg","payload":{"type":"user_message","message":"parent prompt"}}`,
+		`{"timestamp":"2026-05-27T13:16:55.000Z","type":"event_msg","payload":{"type":"turn_complete","turn_id":"turn-1","last_agent_message":"done"}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := readCodexForkSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(snapshot), `"type":"turn_aborted"`) {
+		t.Fatalf("did not expect interrupted boundary for completed turn:\n%s", snapshot)
 	}
 }
 
@@ -392,6 +546,20 @@ func TestClaudeCheckArgsAddTemporaryMCPServerConfig(t *testing.T) {
 	}
 }
 
+func TestClaudeResumeArgsUseSpecificSession(t *testing.T) {
+	args := strings.Join(claudeArgs("prompt", ir.RunOptions{Resume: true, ResumeSessionID: "session_1"}, "", "", "", "", false), "\n")
+	if !strings.Contains(args, "--resume\nsession_1") || strings.Contains(args, "\n-c\n") {
+		t.Fatalf("unexpected claude resume args:\n%s", args)
+	}
+}
+
+func TestClaudeForkArgsUseSpecificSession(t *testing.T) {
+	args := strings.Join(claudeArgs("prompt", ir.RunOptions{Fork: true, ResumeSessionID: "session_1"}, "", "", "", "", false), "\n")
+	if !strings.Contains(args, "--resume\nsession_1\n--fork-session") {
+		t.Fatalf("unexpected claude fork args:\n%s", args)
+	}
+}
+
 func TestClaudeCheckArgsPassDebugLogEnvToMCPServer(t *testing.T) {
 	t.Setenv("ATM_MCP_CHECK_LOG", "/tmp/atm-mcp.log")
 
@@ -419,10 +587,12 @@ func TestClaudeExecuteAllowsTemporaryMCPTools(t *testing.T) {
 		DefMCP: &ir.DefMCPRuntime{
 			Definitions: []string{"echo"},
 		},
+		MCPs: []ir.MCPRuntime{{Name: "atm_webhook", Config: `{"command":"atm"}`, ApprovedTools: []string{"atm_webhook_alarm"}}},
 	}, "/tmp/out.json", "/tmp/schema.json", "", "/tmp/defs.json", false), "\n")
 	if !strings.Contains(args, "--allowedTools") ||
 		!strings.Contains(args, "mcp__atm_output__atm_report_output") ||
-		!strings.Contains(args, "mcp__atm_defs__atm_def_echo") {
+		!strings.Contains(args, "mcp__atm_defs__atm_def_echo") ||
+		!strings.Contains(args, "mcp__atm_webhook__atm_webhook_alarm") {
 		t.Fatalf("missing allowed temporary MCP tools:\n%s", args)
 	}
 }
@@ -547,6 +717,9 @@ func TestCodexParserRendersLifecycleEvents(t *testing.T) {
 			t.Fatalf("expected %q in lifecycle output:\n%s", want, got)
 		}
 	}
+	if parser.sessionID != "thread_1" {
+		t.Fatalf("expected codex session id, got %q", parser.sessionID)
+	}
 }
 
 func TestCodexParserRendersATMMCPCallAsSystemEvent(t *testing.T) {
@@ -592,6 +765,9 @@ func TestClaudeParserRendersSystemThinkingAndResultEvents(t *testing.T) {
 	}
 	if len(parser.messages) != 1 || parser.messages[0].Text != "done" {
 		t.Fatalf("unexpected parsed messages: %#v", parser.messages)
+	}
+	if parser.sessionID != "session_1" {
+		t.Fatalf("expected claude session id, got %q", parser.sessionID)
 	}
 }
 

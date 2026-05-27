@@ -11,7 +11,7 @@ type ReadError struct {
 }
 
 func (e ReadError) Error() string {
-	return fmt.Sprintf("read todo file %q: %v", e.Path, e.Err)
+	return fmt.Sprintf("read ATM file %q: %v", e.Path, e.Err)
 }
 
 func (e ReadError) Unwrap() error {

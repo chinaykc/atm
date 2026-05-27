@@ -63,6 +63,7 @@ func FormatContent(content string) (string, int) {
 		return content, 0
 	}
 	for i := range blocks {
+		blocks[i].Body = document.FormatTaskHeaderBody(blocks[i].Body)
 		blocks[i].Body = langformat.BlockBody(blocks[i].Body)
 	}
 	return renderBlocks(blocks), len(blocks)
@@ -219,6 +220,7 @@ func FormatAppendPrompt(prompt string) (string, int, error) {
 		return "", 0, fmt.Errorf("prompt block is empty")
 	}
 	for i := range blocks {
+		blocks[i].Body = document.FormatTaskHeaderBody(blocks[i].Body)
 		blocks[i].Body = langformat.BlockBody(blocks[i].Body)
 	}
 	var buf bytes.Buffer

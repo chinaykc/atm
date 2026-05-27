@@ -39,26 +39,43 @@ func parseSkillTaskLine(line string) (SkillTaskConfig, bool, error) {
 	if len(fields) == 0 || fields[0] != "/skill" {
 		return SkillTaskConfig{}, false, nil
 	}
-	if len(fields) < 2 {
-		return SkillTaskConfig{}, true, fmt.Errorf("/skill requires subcommand")
+	out, next, err := parseSkillTaskFields(fields, 0)
+	if err != nil {
+		return SkillTaskConfig{}, true, err
 	}
-	var out SkillTaskConfig
-	switch fields[1] {
-	case "use":
-		if len(fields) < 3 {
-			return SkillTaskConfig{}, true, fmt.Errorf("/skill use requires at least one name or path")
-		}
-		out.Use = append(out.Use, fields[2:]...)
-	case "ignore":
-		if len(fields) == 2 {
-			out.IgnoreAll = true
-			return out, true, nil
-		}
-		out.Ignore = append(out.Ignore, fields[2:]...)
-	case "new":
-		return SkillTaskConfig{}, true, fmt.Errorf("/skill new must be written as a standalone global block")
-	default:
-		return SkillTaskConfig{}, true, fmt.Errorf("unsupported /skill subcommand %q", fields[1])
+	if next != len(fields) {
+		return SkillTaskConfig{}, true, fmt.Errorf("unexpected command argument %q", fields[next])
 	}
 	return out, true, nil
+}
+
+func parseSkillTaskFields(fields []string, start int) (SkillTaskConfig, int, error) {
+	if start >= len(fields) || fields[start] != "/skill" {
+		return SkillTaskConfig{}, start, fmt.Errorf("expected /skill")
+	}
+	if start+1 >= len(fields) || isCommandToken(fields[start+1]) {
+		return SkillTaskConfig{}, start, fmt.Errorf("/skill requires subcommand")
+	}
+	var out SkillTaskConfig
+	switch fields[start+1] {
+	case "use":
+		args, next := collectCommandArgs(fields, start+2)
+		if len(args) == 0 {
+			return SkillTaskConfig{}, start, fmt.Errorf("/skill use requires at least one name or path")
+		}
+		out.Use = append(out.Use, args...)
+		return out, next, nil
+	case "ignore":
+		args, next := collectCommandArgs(fields, start+2)
+		if len(args) == 0 {
+			out.IgnoreAll = true
+			return out, next, nil
+		}
+		out.Ignore = append(out.Ignore, args...)
+		return out, next, nil
+	case "new":
+		return SkillTaskConfig{}, start, fmt.Errorf("/skill new must be written as a standalone global block")
+	default:
+		return SkillTaskConfig{}, start, fmt.Errorf("unsupported /skill subcommand %q", fields[start+1])
+	}
 }

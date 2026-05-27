@@ -37,7 +37,7 @@ func ReadBlocks(filePath string) ([]document.Block, error) {
 	}
 	blocks := document.ParseBlocks(string(content))
 	if len(blocks) == 0 {
-		return nil, fmt.Errorf("%w in todo file %q", ErrNoTasks, filePath)
+		return nil, fmt.Errorf("%w in ATM file %q", ErrNoTasks, filePath)
 	}
 	return blocks, nil
 }
@@ -70,7 +70,9 @@ func SaveRunning(filePath string, lease BlockLease, info marker.RunningInfo) (Bl
 		return BlockLease{}, ErrObsolete
 	}
 	info.ID, info.Source = reportIdentityForWrite(blocks[lease.Index], info.Source)
-	info.Report = marker.ATMReportPath(info.ID)
+	if strings.TrimSpace(info.Report) == "" {
+		info.Report = marker.ATMReportPath(info.ID)
+	}
 	blocks[lease.Index].Body = marker.AppendRunning(blocks[lease.Index].Body, info)
 	if err := writeBlocksLocked(filePath, blocks); err != nil {
 		return BlockLease{}, err
@@ -93,7 +95,9 @@ func MarkDone(filePath string, lease BlockLease, info marker.DoneInfo) error {
 		return ErrObsolete
 	}
 	info.ID, info.Source = reportIdentityForWrite(blocks[lease.Index], info.Source)
-	info.Report = marker.ATMReportPath(info.ID)
+	if strings.TrimSpace(info.Report) == "" {
+		info.Report = marker.ATMReportPath(info.ID)
+	}
 	blocks[lease.Index].Body = marker.AppendDone(blocks[lease.Index].Body, info)
 	return writeBlocksLocked(filePath, blocks)
 }
@@ -113,7 +117,9 @@ func MarkFailed(filePath string, lease BlockLease, info marker.FailedInfo) error
 		return ErrObsolete
 	}
 	info.ID, info.Source = reportIdentityForWrite(blocks[lease.Index], info.Source)
-	info.Report = marker.ATMReportPath(info.ID)
+	if strings.TrimSpace(info.Report) == "" {
+		info.Report = marker.ATMReportPath(info.ID)
+	}
 	blocks[lease.Index].Body = marker.AppendFailed(blocks[lease.Index].Body, info)
 	return writeBlocksLocked(filePath, blocks)
 }
@@ -133,7 +139,9 @@ func MarkSkipped(filePath string, lease BlockLease, info marker.SkippedInfo) err
 		return ErrObsolete
 	}
 	info.ID, info.Source = reportIdentityForWrite(blocks[lease.Index], info.Source)
-	info.Report = marker.ATMReportPath(info.ID)
+	if strings.TrimSpace(info.Report) == "" {
+		info.Report = marker.ATMReportPath(info.ID)
+	}
 	blocks[lease.Index].Body = marker.AppendSkipped(blocks[lease.Index].Body, info)
 	return writeBlocksLocked(filePath, blocks)
 }
@@ -171,7 +179,7 @@ func readBlocksUnlocked(filePath string) ([]document.Block, error) {
 	}
 	blocks := document.ParseBlocks(string(content))
 	if len(blocks) == 0 {
-		return nil, fmt.Errorf("%w in todo file %q", ErrNoTasks, filePath)
+		return nil, fmt.Errorf("%w in ATM file %q", ErrNoTasks, filePath)
 	}
 	return blocks, nil
 }

@@ -34,6 +34,7 @@ type ExecuteResult struct {
 	Messages         []ir.OutputMessage
 	RawEvents        string
 	StructuredOutput []byte
+	SessionID        string
 }
 
 type Config struct {
@@ -61,6 +62,13 @@ func NewRunner(name string, config Config) (Runner, error) {
 	return factory(config)
 }
 
+func validateResumeOptions(opts ir.RunOptions) error {
+	if (opts.Resume || opts.Fork) && strings.TrimSpace(opts.ResumeSessionID) == "" {
+		return fmt.Errorf("resume requires a recorded agent session id")
+	}
+	return nil
+}
+
 func SupportedRunnerNames() []string {
 	return slices.Sorted(maps.Keys(factories))
 }
@@ -82,6 +90,9 @@ func (r codexRunner) Name() string {
 }
 
 func (r codexRunner) Execute(ctx context.Context, todoPath, prompt string, opts ir.RunOptions, stdout, stderr io.Writer) (ExecuteResult, error) {
+	if opts.Fork {
+		return r.executeFork(ctx, todoPath, prompt, opts, stdout, stderr)
+	}
 	skillCleanup, err := prepareSkills("codex", opts)
 	if err != nil {
 		return ExecuteResult{}, err
@@ -111,6 +122,9 @@ func (r codexRunner) Execute(ctx context.Context, todoPath, prompt string, opts 
 	if len(opts.DBs) > 0 {
 		prompt = appendDBToolInstruction(prompt)
 	}
+	if err := validateResumeOptions(opts); err != nil {
+		return ExecuteResult{}, err
+	}
 	if opts.DefMCP != nil && len(opts.DefMCP.Definitions) > 0 && opts.DefMCP.Depth > 0 {
 		prompt = appendDefToolInstruction(prompt, opts.DefMCP.Definitions)
 	}
@@ -120,16 +134,22 @@ func (r codexRunner) Execute(ctx context.Context, todoPath, prompt string, opts 
 	cmd.Stdin = strings.NewReader(prompt)
 	stream, err := runAgentCommand(cmd, r.Name(), stdout, stderr)
 	if err != nil {
-		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw}, err
+		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, SessionID: stream.sessionID}, err
 	}
 	structuredOutput, err := readOutputMCPResult(resultFile)
 	if err != nil {
-		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw}, err
+		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, SessionID: stream.sessionID}, err
 	}
-	return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, StructuredOutput: structuredOutput}, nil
+	return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, StructuredOutput: structuredOutput, SessionID: stream.sessionID}, nil
 }
 
 func (r codexRunner) Check(ctx context.Context, todoPath, prompt, condition string, opts ir.RunOptions, stdout, stderr io.Writer) (bool, error) {
+	if opts.Fork {
+		return false, fmt.Errorf("codex fork is not supported for condition checks")
+	}
+	if err := validateResumeOptions(opts); err != nil {
+		return false, err
+	}
 	return runCheckCommand(ctx, r.path, func(_ string, resultFile, dbConfigFile string) []string {
 		return codexCheckArgs(opts, resultFile, dbConfigFile)
 	}, todoPath, buildCheckPrompt, prompt, condition, opts, true, true, r.Name(), stdout, stderr)
@@ -138,7 +158,7 @@ func (r codexRunner) Check(ctx context.Context, todoPath, prompt, condition stri
 func codexArgs(opts ir.RunOptions, resultFile, schemaFile, dbConfigFile, defConfigFile string, readonlyDB bool) []string {
 	args := []string{"exec", "--json"}
 	if opts.Resume {
-		args = append(args, "resume", "--last")
+		args = append(args, "resume", opts.ResumeSessionID)
 	}
 	if opts.Output != nil && opts.Output.IsStructured() {
 		args = append(args, codexOutputMCPArgs(opts.Output, resultFile, schemaFile)...)
@@ -193,7 +213,7 @@ func codexCheckArgs(opts ir.RunOptions, resultFile string, dbConfigFiles ...stri
 
 	args := []string{"exec", "--json"}
 	if opts.Resume {
-		args = append(args, "resume", "--last")
+		args = append(args, "resume", opts.ResumeSessionID)
 	}
 	args = append(args, configArgs...)
 	args = append(args, opts.Args...)
@@ -259,6 +279,9 @@ func codexExternalMCPArgs(mcps []ir.MCPRuntime) []string {
 				args = append(args, "-c", prefix+".env."+key+"="+tomlString(value))
 			}
 		}
+		for _, tool := range item.ApprovedTools {
+			args = append(args, "-c", prefix+".tools."+tool+".approval_mode=\"approve\"")
+		}
 	}
 	return args
 }
@@ -309,6 +332,9 @@ func (r claudeRunner) Execute(ctx context.Context, todoPath, prompt string, opts
 	if len(opts.DBs) > 0 {
 		prompt = appendDBToolInstruction(prompt)
 	}
+	if err := validateResumeOptions(opts); err != nil {
+		return ExecuteResult{}, err
+	}
 	if opts.DefMCP != nil && len(opts.DefMCP.Definitions) > 0 && opts.DefMCP.Depth > 0 {
 		prompt = appendDefToolInstruction(prompt, opts.DefMCP.Definitions)
 	}
@@ -317,16 +343,22 @@ func (r claudeRunner) Execute(ctx context.Context, todoPath, prompt string, opts
 	cmd.Dir = opts.Workdir
 	stream, err := runAgentCommand(cmd, r.Name(), stdout, stderr)
 	if err != nil {
-		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw}, err
+		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, SessionID: stream.sessionID}, err
 	}
 	structuredOutput, err := readOutputMCPResult(resultFile)
 	if err != nil {
-		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw}, err
+		return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, SessionID: stream.sessionID}, err
 	}
-	return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, StructuredOutput: structuredOutput}, nil
+	return ExecuteResult{Messages: stream.messages, RawEvents: stream.raw, StructuredOutput: structuredOutput, SessionID: stream.sessionID}, nil
 }
 
 func (r claudeRunner) Check(ctx context.Context, todoPath, prompt, condition string, opts ir.RunOptions, stdout, stderr io.Writer) (bool, error) {
+	if opts.Fork {
+		return false, fmt.Errorf("fork is not supported for condition checks")
+	}
+	if err := validateResumeOptions(opts); err != nil {
+		return false, err
+	}
 	return runCheckCommand(ctx, r.path, func(checkPrompt, resultFile, dbConfigFile string) []string {
 		return claudeCheckArgs(checkPrompt, opts, resultFile, dbConfigFile)
 	}, todoPath, buildCheckPrompt, prompt, condition, opts, false, true, r.Name(), stdout, stderr)
@@ -335,13 +367,16 @@ func (r claudeRunner) Check(ctx context.Context, todoPath, prompt, condition str
 func claudeArgs(prompt string, opts ir.RunOptions, resultFile, schemaFile, dbConfigFile, defConfigFile string, readonlyDB bool) []string {
 	args := make([]string, 0, len(opts.Args)+3)
 	if opts.Resume {
-		args = append(args, "-c")
+		args = append(args, "--resume", opts.ResumeSessionID)
+	}
+	if opts.Fork {
+		args = append(args, "--resume", opts.ResumeSessionID, "--fork-session")
 	}
 	args = append(args, opts.Args...)
 	if opts.Output != nil && opts.Output.IsStructured() || dbConfigFile != "" || len(opts.MCPs) > 0 || defConfigFile != "" {
 		args = append(args, "--mcp-config", executeMCPConfigJSON(opts.Output, resultFile, schemaFile, dbConfigFile, defConfigFile, opts.MCPs, opts.DefMCP, readonlyDB))
 	}
-	args = append(args, claudeAllowedToolsArgs(opts.Output, dbConfigFile != "", opts.DefMCP)...)
+	args = append(args, claudeAllowedToolsArgs(opts.Output, dbConfigFile != "", opts.DefMCP, opts.MCPs)...)
 	args = append(args, "--output-format", "stream-json", "--verbose")
 	args = append(args, "-p", prompt)
 	return args
@@ -354,7 +389,10 @@ func claudeCheckArgs(prompt string, opts ir.RunOptions, resultFile string, dbCon
 	}
 	args := make([]string, 0, len(opts.Args)+5)
 	if opts.Resume {
-		args = append(args, "-c")
+		args = append(args, "--resume", opts.ResumeSessionID)
+	}
+	if opts.Fork {
+		args = append(args, "--resume", opts.ResumeSessionID, "--fork-session")
 	}
 	args = append(args, opts.Args...)
 	args = append(args, "--mcp-config", checkMCPConfigJSON(resultFile, dbConfigFile))
@@ -364,13 +402,20 @@ func claudeCheckArgs(prompt string, opts ir.RunOptions, resultFile string, dbCon
 	return args
 }
 
-func claudeAllowedToolsArgs(output *ir.OutputSpec, hasDB bool, defMCP *ir.DefMCPRuntime) []string {
+func claudeAllowedToolsArgs(output *ir.OutputSpec, hasDB bool, defMCP *ir.DefMCPRuntime, external ...[]ir.MCPRuntime) []string {
 	var names []string
 	if output != nil && output.IsStructured() {
 		names = append(names, claudeMCPToolName(outputMCPName, mcp.OutputToolName))
 	}
 	for _, tool := range defMCPToolNames(defMCP) {
 		names = append(names, claudeMCPToolName(defsMCPName, tool))
+	}
+	if len(external) > 0 {
+		for _, item := range external[0] {
+			for _, tool := range item.ApprovedTools {
+				names = append(names, claudeMCPToolName(item.Name, tool))
+			}
+		}
 	}
 	return claudeAllowedToolsForNames(names, hasDB)
 }

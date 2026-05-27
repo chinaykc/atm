@@ -455,6 +455,11 @@ func validateTaskIR(label string, task Task, symbols SymbolTable, localPools map
 	if err := validateTaskResources(label, task, symbols, ref); err != nil {
 		return err
 	}
+	for _, name := range task.Webhook.Use {
+		if _, ok := symbols.Webhooks[name]; !ok {
+			return fmt.Errorf("%s: unknown webhook %q", label, name)
+		}
+	}
 	return validateFlowNode(label, task.Flow, symbols, localPools, ref, false)
 }
 
@@ -488,6 +493,10 @@ func validateFlowNode(label string, node FlowNode, symbols SymbolTable, localPoo
 	case FlowCall:
 		if err := validateCall(label, node.Call, symbols, ref); err != nil {
 			return err
+		}
+	case FlowWebhook:
+		if _, ok := symbols.Webhooks[node.Webhook.Name]; !ok {
+			return fmt.Errorf("%s: unknown webhook %q", label, node.Webhook.Name)
 		}
 	}
 	childInsideIf := insideIf || node.Kind == FlowIf

@@ -17,12 +17,12 @@ func cleanCommand(stdout io.Writer) *urfavecli.Command {
 		Description: "With no cleanup option, atm clean removes generated report blocks from the document only.",
 		ArgsUsage:   "[files...]",
 		Flags: []urfavecli.Flag{
-			todoFilesFlag(),
 			&urfavecli.BoolFlag{Name: "document", Usage: "remove generated report blocks from the document"},
 			&urfavecli.BoolFlag{Name: "reports", Usage: "remove detail reports"},
 			&urfavecli.BoolFlag{Name: "state", Usage: "remove state files"},
 			&urfavecli.BoolFlag{Name: "logs", Usage: "remove logs"},
 			&urfavecli.BoolFlag{Name: "all", Usage: "remove document, reports, state, and logs"},
+			&urfavecli.BoolFlag{Name: "repair-ids", Usage: "repair duplicate ATM report identities in result documents"},
 		},
 		Action: func(_ context.Context, cmd *urfavecli.Command) error {
 			return runCleanCommand(cmd, stdout)
@@ -31,8 +31,11 @@ func cleanCommand(stdout io.Writer) *urfavecli.Command {
 }
 
 func runCleanCommand(cmd *urfavecli.Command, stdout io.Writer) error {
+	if cmd.Bool("repair-ids") {
+		return runRepairIDsCommand(cmd, stdout)
+	}
 	opts := cleanOptionsFromCommand(cmd)
-	cleanFiles, err := resolveRunFiles(commandFiles(cmd), cmd.Args().Slice())
+	cleanFiles, err := resolveRunFiles(cmd.Args().Slice())
 	if err != nil {
 		return err
 	}
@@ -66,22 +69,8 @@ func cleanOptionsFromCommand(cmd *urfavecli.Command) CleanOptions {
 	return opts
 }
 
-func repairIDsCommand(stdout io.Writer) *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:      "repair-ids",
-		Usage:     "repair duplicate ATM report identities",
-		ArgsUsage: "[files...]",
-		Flags: []urfavecli.Flag{
-			todoFilesFlag(),
-		},
-		Action: func(_ context.Context, cmd *urfavecli.Command) error {
-			return runRepairIDsCommand(cmd, stdout)
-		},
-	}
-}
-
 func runRepairIDsCommand(cmd *urfavecli.Command, stdout io.Writer) error {
-	repairFiles, err := resolveRunFiles(commandFiles(cmd), cmd.Args().Slice())
+	repairFiles, err := resolveRunFiles(cmd.Args().Slice())
 	if err != nil {
 		return err
 	}
@@ -96,11 +85,8 @@ func runRepairIDsCommand(cmd *urfavecli.Command, stdout io.Writer) error {
 func appendCommand(env commandEnv) *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:      "append",
-		Usage:     "append a formatted prompt block to the active todo file",
-		ArgsUsage: "[prompt...]",
-		Flags: []urfavecli.Flag{
-			&urfavecli.StringFlag{Name: "file", Value: "todo.txt", Usage: "todo file path"},
-		},
+		Usage:     "append a formatted prompt block to an ATM file",
+		ArgsUsage: "<file> [prompt...]",
 		Action: func(_ context.Context, cmd *urfavecli.Command) error {
 			return runAppendCommand(cmd, env)
 		},
@@ -108,16 +94,19 @@ func appendCommand(env commandEnv) *urfavecli.Command {
 }
 
 func runAppendCommand(cmd *urfavecli.Command, env commandEnv) error {
-	prompt, err := readAppendPrompt(cmd, env)
+	if cmd.Args().Len() == 0 {
+		return fmt.Errorf("no ATM file specified")
+	}
+	prompt, err := readAppendPrompt(cmd.Args().Slice()[1:], env)
 	if err != nil {
 		return err
 	}
-	return RunAppend(cmd.String("file"), prompt, env.Stdout)
+	return RunAppend(cmd.Args().Get(0), prompt, env.Stdout)
 }
 
-func readAppendPrompt(cmd *urfavecli.Command, env commandEnv) (string, error) {
-	if cmd.Args().Len() > 0 {
-		return strings.Join(cmd.Args().Slice(), " "), nil
+func readAppendPrompt(args []string, env commandEnv) (string, error) {
+	if len(args) > 0 {
+		return strings.Join(args, " "), nil
 	}
 	stat, err := env.Stdin.Stat()
 	if err != nil {
@@ -135,11 +124,9 @@ func readAppendPrompt(cmd *urfavecli.Command, env commandEnv) (string, error) {
 
 func formatCommand(stdout io.Writer) *urfavecli.Command {
 	return &urfavecli.Command{
-		Name:  "format",
-		Usage: "format generated tags in the todo file",
-		Flags: []urfavecli.Flag{
-			&urfavecli.StringFlag{Name: "file", Value: "todo.txt", Usage: "todo file path"},
-		},
+		Name:      "format",
+		Usage:     "format generated tags in the ATM file",
+		ArgsUsage: "<file>",
 		Action: func(_ context.Context, cmd *urfavecli.Command) error {
 			return runFormatCommand(cmd, stdout)
 		},
@@ -147,31 +134,19 @@ func formatCommand(stdout io.Writer) *urfavecli.Command {
 }
 
 func runFormatCommand(cmd *urfavecli.Command, stdout io.Writer) error {
-	if err := rejectArgs(cmd); err != nil {
+	file, err := singleTodoFileArg(cmd)
+	if err != nil {
 		return err
 	}
-	return RunFormat(cmd.String("file"), stdout)
+	return RunFormat(file, stdout)
 }
 
-func untagCommand(stdout io.Writer) *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:  "untag",
-		Usage: "remove done and/or running state from the todo file",
-		Flags: []urfavecli.Flag{
-			&urfavecli.StringFlag{Name: "file", Value: "todo.txt", Usage: "todo file path"},
-			&urfavecli.BoolFlag{Name: "done", Value: true, Usage: "remove done state"},
-			&urfavecli.BoolFlag{Name: "running", Value: true, Usage: "remove running state"},
-		},
-		Action: func(_ context.Context, cmd *urfavecli.Command) error {
-			return runUntagCommand(cmd, stdout)
-		},
+func singleTodoFileArg(cmd *urfavecli.Command) (string, error) {
+	if cmd.Args().Len() == 0 {
+		return "", fmt.Errorf("no ATM file specified")
 	}
-}
-
-func runUntagCommand(cmd *urfavecli.Command, stdout io.Writer) error {
-	if err := rejectArgs(cmd); err != nil {
-		return err
+	if cmd.Args().Len() > 1 {
+		return "", fmt.Errorf("unexpected argument %q", cmd.Args().Get(1))
 	}
-	opts := UntagOptions{Done: cmd.Bool("done"), Running: cmd.Bool("running")}
-	return RunUntag(cmd.String("file"), stdout, opts)
+	return cmd.Args().Get(0), nil
 }

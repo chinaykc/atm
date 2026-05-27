@@ -232,7 +232,7 @@ func stringSet(items []string) map[string]struct{} {
 
 func isBuiltinMCPName(name string) bool {
 	switch name {
-	case "atm_check", "atm_output", "atm_db", "atm_defs":
+	case "atm_check", "atm_output", "atm_db", "atm_defs", "atm_webhook":
 		return true
 	default:
 		return false

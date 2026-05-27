@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 )
 
-type UntagOptions = taskdoc.UntagOptions
-
 type CleanOptions struct {
 	Document bool
 	Reports  bool
@@ -22,15 +20,6 @@ type CleanResult struct {
 	ReportDirs     int
 	StateFiles     int
 	LogDirs        int
-}
-
-func RunUntag(filePath string, stdout io.Writer, opts taskdoc.UntagOptions) error {
-	result, err := taskdoc.UntagFile(filePath, opts)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "removed %d done state block(s) and %d running state block(s) from %s\n", result.DoneRemoved, result.RunningRemoved, filePath)
-	return nil
 }
 
 func RunFormat(filePath string, stdout io.Writer) error {

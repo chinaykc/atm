@@ -39,6 +39,40 @@ func TestServeCheckReportsToolAndWritesResult(t *testing.T) {
 	}
 }
 
+func TestCheckRejectsUnknownOrMissingPassed(t *testing.T) {
+	cases := []struct {
+		name string
+		args string
+		want string
+	}{
+		{
+			name: "unknown passed typo",
+			args: `{"passsed":true,"summary":"done"}`,
+			want: `unknown field "passsed"`,
+		},
+		{
+			name: "missing passed",
+			args: `{"summary":"done"}`,
+			want: "passed is required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeCheckResult(json.RawMessage(tc.args))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+	result, err := decodeCheckResult(json.RawMessage(`{"passed":false,"summary":"not yet"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || result.Summary != "not yet" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestRunCheckServerCLIRequiresResultFile(t *testing.T) {
 	var stderr strings.Builder
 	err := RunCheckServerCLI(nil, strings.NewReader(""), &strings.Builder{}, &stderr)
@@ -151,6 +185,34 @@ func TestServeOutputReportsSchemaAndWritesResult(t *testing.T) {
 	}
 	if !ok || !strings.Contains(string(data), `"reason": "done"`) {
 		t.Fatalf("unexpected output result ok=%v data=%s", ok, data)
+	}
+}
+
+func TestServeOutputRejectsSchemaInvalidResult(t *testing.T) {
+	resultFile := filepath.Join(t.TempDir(), "output.json")
+	schema := `{"type":"object","required":["reason"],"properties":{"reason":{"type":"string"}}}`
+	server, err := newOutputSDKServer(resultFile, schema, "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, cleanup := connectTestMCP(t, server)
+	defer cleanup()
+	_, err = session.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name:      OutputToolName,
+		Arguments: map[string]any{"detail": "missing required reason"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "structured output does not match schema") {
+		t.Fatalf("expected schema validation error, got %v", err)
+	}
+	if _, ok, err := ReadOutputResult(resultFile); err != nil || ok {
+		t.Fatalf("invalid output should not be recorded: ok=%v err=%v", ok, err)
+	}
+	_, err = session.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name:      OutputToolName,
+		Arguments: map[string]any{"reason": 123},
+	})
+	if err == nil || !strings.Contains(err.Error(), "structured output does not match schema") {
+		t.Fatalf("expected schema validation error, got %v", err)
 	}
 }
 

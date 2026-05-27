@@ -61,6 +61,7 @@ type taskExecution struct {
 	stderr       io.Writer
 	file         interface{ Close() error }
 	logPath      string
+	taskDir      string
 	reportID     string
 	reportSource string
 	reportPath   string
@@ -143,53 +144,58 @@ type branchCollector struct {
 }
 
 func (e *Engine) runTask(ctx context.Context, lease store.BlockLease, task compiler.Task, options compiler.RunOptions) error {
-	stdout, stderr, file, path, err := e.taskWriters(task.BlockIndex)
-	if err != nil {
-		return err
-	}
-	writeATMEvent(stderr, "log", "task %d %s", task.BlockIndex+1, path)
-
 	exec := &taskExecution{
 		engine:     e,
 		task:       task,
 		lease:      lease,
 		start:      time.Now(),
-		stdout:     stdout,
-		stderr:     stderr,
-		file:       file,
-		logPath:    path,
 		branches:   &branchCollector{},
 		writeState: true,
 	}
 	if task.Cursor.Active {
 		exec.start = task.Cursor.Start
 		exec.runs = task.Cursor.TotalRuns
+		if id, _, _, err := store.LeaseReportIdentity(e.filePath, exec.lease); err == nil {
+			source := exec.sourcePromptHash()
+			exec.setReportIdentity(id, source, e.taskReportPath(task.BlockIndex, id))
+		}
 	} else if exec.writeState && !isWaitOnly(task) {
 		updated, err := store.SaveRunning(e.filePath, exec.lease, compiler.RunningInfo{Active: true, Start: exec.start, Source: exec.sourcePromptHash()})
 		if err != nil {
-			_ = file.Close()
 			return err
 		}
 		exec.lease = updated
-		if id, _, report, err := store.LeaseReportIdentity(e.filePath, exec.lease); err != nil {
-			_ = file.Close()
+		if id, _, _, err := store.LeaseReportIdentity(e.filePath, exec.lease); err != nil {
 			return err
 		} else {
 			source := exec.sourcePromptHash()
+			report := e.taskReportPath(task.BlockIndex, id)
 			exec.setReportIdentity(id, source, report)
-			if err := e.updateTaskState(task.BlockIndex, taskStateUpdate{
-				ID:               id,
-				Status:           "running",
-				SourcePromptHash: source,
-				StartedAt:        exec.start,
-				UpdatedAt:        time.Now(),
-				Runs:             exec.runs,
-				Report:           report,
-				Logs:             []string{path},
-			}); err != nil {
-				_ = file.Close()
-				return err
-			}
+		}
+	}
+	exec.taskDir = e.taskArtifactDir(task.BlockIndex, exec.reportID)
+	stdout, stderr, file, path, err := e.taskWriters(task.BlockIndex, exec.taskDir)
+	if err != nil {
+		return err
+	}
+	exec.stdout = stdout
+	exec.stderr = stderr
+	exec.file = file
+	exec.logPath = path
+	writeATMEvent(stderr, "log", "task %d %s", task.BlockIndex+1, path)
+	if exec.writeState && !isWaitOnly(task) && exec.reportID != "" {
+		if err := e.updateTaskState(task.BlockIndex, taskStateUpdate{
+			ID:               exec.reportID,
+			Status:           "running",
+			SourcePromptHash: exec.reportSource,
+			StartedAt:        exec.start,
+			UpdatedAt:        time.Now(),
+			Runs:             exec.runs,
+			Report:           exec.reportPath,
+			Logs:             []string{path},
+		}); err != nil {
+			_ = file.Close()
+			return err
 		}
 	}
 
@@ -248,6 +254,9 @@ func (x *taskExecution) setReportIdentity(id, source, report string) {
 	x.reportID = id
 	x.reportSource = source
 	x.reportPath = report
+	if x.taskDir == "" {
+		x.taskDir = x.engine.taskArtifactDir(x.task.BlockIndex, id)
+	}
 }
 
 func (x *taskExecution) sourcePromptHash() string {
@@ -258,9 +267,10 @@ func (x *taskExecution) sourcePromptHash() string {
 }
 
 func (x *taskExecution) reportIdentity() (id, source, report string, orphan bool, err error) {
-	id, _, report, err = store.LeaseReportIdentity(x.engine.filePath, x.lease)
+	id, _, _, err = store.LeaseReportIdentity(x.engine.filePath, x.lease)
 	if err == nil {
 		source = x.sourcePromptHash()
+		report = x.engine.taskReportPath(x.task.BlockIndex, id)
 		x.setReportIdentity(id, source, report)
 		return id, source, report, false, nil
 	}
@@ -277,12 +287,16 @@ func (x *taskExecution) reportIdentity() (id, source, report string, orphan bool
 }
 
 func (x *taskExecution) reportIdentityLocked() (id, source, report string, orphan bool, err error) {
-	id, _, report, err = store.LeaseReportIdentity(x.engine.filePath, x.lease)
+	id, _, _, err = store.LeaseReportIdentity(x.engine.filePath, x.lease)
 	if err == nil {
 		source = x.sourcePromptHash()
+		report = x.engine.taskReportPath(x.task.BlockIndex, id)
 		x.reportID = id
 		x.reportSource = source
 		x.reportPath = report
+		if x.taskDir == "" {
+			x.taskDir = x.engine.taskArtifactDir(x.task.BlockIndex, id)
+		}
 		return id, source, report, false, nil
 	}
 	if !errors.Is(err, store.ErrObsolete) && x.reportID == "" {
@@ -486,6 +500,11 @@ func (x *taskExecution) executeFlow(ctx context.Context, current execContext, no
 			current.vars[node.Call.Assign] = normalizeReturnValue(value)
 		}
 		return current, 0, false, nil
+	case compiler.FlowWebhook:
+		if err := x.sendWebhook(ctx, current, node.Webhook); err != nil {
+			return current, 0, false, err
+		}
+		return current, 0, false, nil
 	case compiler.FlowReturn:
 		value, err := x.evaluateReturn(ctx, current, node.Return)
 		if err != nil {
@@ -542,6 +561,9 @@ func (x *taskExecution) evaluateFlowIfCondition(ctx context.Context, current exe
 		renderedOptions, err := x.renderRunOptions(ctx, &current, current.options)
 		if err != nil {
 			return false, fmt.Errorf("args template failed: %w", err)
+		}
+		if err := x.resolveSessionOptions(&renderedOptions); err != nil {
+			return false, err
 		}
 		return x.engine.runner.Check(ctx, x.engine.filePath, prompt, renderedCondition, renderedOptions, x.stdout, x.stderr)
 	}
@@ -680,7 +702,7 @@ func waitAgentPrompt(prompt, pool string, tasks []asyncTaskSnapshot) string {
 		}
 	}
 	b.WriteString("\nCancellation capability: not currently available in this runtime; report when cancellation would be appropriate.\n\n")
-	b.WriteString("Coordinate the wait: monitor the todo file reports and logs if available, summarize completed, failed, cancelled, and follow-up work, and report clearly if intervention is needed.\n\n")
+	b.WriteString("Coordinate the wait: monitor the ATM file reports and logs if available, summarize completed, failed, cancelled, and follow-up work, and report clearly if intervention is needed.\n\n")
 	b.WriteString(prompt)
 	return b.String()
 }
@@ -943,6 +965,9 @@ func (x *taskExecution) checkLoopCondition(ctx context.Context, current execCont
 		renderedOptions, err := x.renderRunOptions(ctx, &current, current.options)
 		if err != nil {
 			return false, fmt.Errorf("args template failed: %w", err)
+		}
+		if err := x.resolveSessionOptions(&renderedOptions); err != nil {
+			return false, err
 		}
 		return x.engine.runner.Check(ctx, x.engine.filePath, prompt, condition, renderedOptions, x.stdout, x.stderr)
 	}
@@ -1441,6 +1466,9 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 	if err != nil {
 		return current, 0, fmt.Errorf("task %d args template failed: %w", x.task.BlockIndex+1, err)
 	}
+	if err := x.resolveSessionOptions(&renderedOptions); err != nil {
+		return current, 0, fmt.Errorf("task %d %w", x.task.BlockIndex+1, err)
+	}
 	rawPrompt := x.task.Prompt
 	if promptOverride != "" {
 		rawPrompt = promptOverride
@@ -1516,12 +1544,13 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 	x.mu.Lock()
 	x.runs++
 	runNumber := x.runs
-	x.messages = append(x.messages, annotateMessages(result.Messages, current.agent)...)
+	annotatedMessages := annotateMessages(result.Messages, current.agent)
+	x.messages = append(x.messages, annotatedMessages...)
 	if current.callState != nil {
-		current.callState.addMessages(annotateMessages(result.Messages, current.agent))
+		current.callState.addMessages(annotatedMessages)
 	}
 	messages := x.recentMessagesLocked()
-	eventPath, eventErr := x.engine.outputs.writeEvents(x.task.BlockIndex, runNumber, x.engine.runner.Name(), current.agent, result.RawEvents)
+	eventPath, eventErr := x.engine.outputs.writeEvents(x.taskDir, x.task.BlockIndex, runNumber, x.engine.runner.Name(), current.agent, result.RawEvents)
 	if eventErr != nil {
 		x.mu.Unlock()
 		return current, 1, eventErr
@@ -1540,7 +1569,7 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 			suffix = outputAgentSuffix(current)
 		}
 		if outputWritesFile {
-			structuredOutputPath, err = x.engine.outputs.writeStructuredOutput(x.task.BlockIndex, runNumber, activeOutputSpec.FileName, suffix, result.StructuredOutput)
+			structuredOutputPath, err = x.engine.outputs.writeStructuredOutput(x.taskDir, x.task.BlockIndex, runNumber, activeOutputSpec.FileName, suffix, result.StructuredOutput)
 			if err != nil {
 				x.mu.Unlock()
 				return current, 1, err
@@ -1560,11 +1589,23 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 			text = strings.TrimSpace(result.RawEvents)
 		}
 		if text != "" {
-			structuredOutputPath, err = x.engine.outputs.writeTextOutput(x.task.BlockIndex, runNumber, outputSpec.FileName, suffix, []byte(text+"\n"))
+			structuredOutputPath, err = x.engine.outputs.writeTextOutput(x.taskDir, x.task.BlockIndex, runNumber, outputSpec.FileName, suffix, []byte(text+"\n"))
 			if err != nil {
 				x.mu.Unlock()
 				return current, 1, err
 			}
+		}
+	}
+	x.engine.recordResult(annotatedMessages, result.StructuredOutput)
+	if x.writeState && !x.engine.isAbandoningBackground() && x.task.Name != "" && result.SessionID != "" {
+		id, _, _, _, identityErr := x.reportIdentityLocked()
+		if identityErr != nil {
+			x.mu.Unlock()
+			return current, 1, identityErr
+		}
+		if stateErr := x.engine.updateSessionState(x.task.Name, x.engine.runner.Name(), result.SessionID, id, time.Now()); stateErr != nil {
+			x.mu.Unlock()
+			return current, 1, stateErr
 		}
 	}
 	if x.writeState && !x.engine.isAbandoningBackground() {
@@ -1628,6 +1669,33 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 		writeATMEvent(x.stderr, "output", "task %d run %d %s", x.task.BlockIndex+1, runNumber, structuredOutputPath)
 	}
 	return current, 1, nil
+}
+
+func (x *taskExecution) resolveSessionOptions(opts *compiler.RunOptions) error {
+	if opts == nil || (!opts.Resume && !opts.Fork) {
+		return nil
+	}
+	label := "/resume"
+	target := strings.TrimSpace(opts.ResumeTarget)
+	if opts.Fork {
+		label = "/fork"
+		target = strings.TrimSpace(opts.ForkTarget)
+	}
+	if target == "" {
+		return fmt.Errorf("%s requires a task name", label)
+	}
+	session, ok, err := x.engine.resolveSessionState(target)
+	if err != nil {
+		return fmt.Errorf("read %s session %q: %w", strings.TrimPrefix(label, "/"), target, err)
+	}
+	if !ok || strings.TrimSpace(session.ID) == "" {
+		return fmt.Errorf("no recorded agent session for %s %s", label, target)
+	}
+	if session.Tool != "" && session.Tool != x.engine.runner.Name() {
+		return fmt.Errorf("%s %s recorded a %s session, current tool is %s", label, target, session.Tool, x.engine.runner.Name())
+	}
+	opts.ResumeSessionID = session.ID
+	return nil
 }
 
 func (x *taskExecution) recentMessagesLocked() []compiler.OutputMessage {
@@ -1719,14 +1787,30 @@ func (x *taskExecution) renderRunOptions(ctx context.Context, current *execConte
 
 func renderRunOptions(opts compiler.RunOptions, vars map[string]any) (compiler.RunOptions, error) {
 	rendered := compiler.RunOptions{
-		Resume:   opts.Resume,
-		Output:   opts.Output,
-		DBs:      slices.Clone(opts.DBs),
-		Workdir:  opts.Workdir,
-		Skills:   slices.Clone(opts.Skills),
-		MCPs:     slices.Clone(opts.MCPs),
-		DefMCP:   cloneDefMCPRuntime(opts.DefMCP),
-		DefDepth: opts.DefDepth,
+		Resume:          opts.Resume,
+		ResumeSessionID: opts.ResumeSessionID,
+		Fork:            opts.Fork,
+		Output:          opts.Output,
+		DBs:             slices.Clone(opts.DBs),
+		Workdir:         opts.Workdir,
+		Skills:          slices.Clone(opts.Skills),
+		MCPs:            slices.Clone(opts.MCPs),
+		DefMCP:          cloneDefMCPRuntime(opts.DefMCP),
+		DefDepth:        opts.DefDepth,
+	}
+	if opts.ResumeTarget != "" {
+		value, err := compiler.RenderTemplate(opts.ResumeTarget, vars)
+		if err != nil {
+			return compiler.RunOptions{}, err
+		}
+		rendered.ResumeTarget = value
+	}
+	if opts.ForkTarget != "" {
+		value, err := compiler.RenderTemplate(opts.ForkTarget, vars)
+		if err != nil {
+			return compiler.RunOptions{}, err
+		}
+		rendered.ForkTarget = value
 	}
 	for _, arg := range opts.Args {
 		value, err := compiler.RenderTemplate(arg, vars)

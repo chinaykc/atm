@@ -38,7 +38,7 @@ func checkDocumentReports(root string, docReports map[string]marker.ATMReportMet
 			warn(fmt.Sprintf("ATM report id %q has no detail report path", id))
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(meta.Report))); err != nil {
+		if _, err := os.Stat(resolveArtifactPath(root, meta.Report)); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				warn(fmt.Sprintf("ATM report id %q references missing detail report %s", id, meta.Report))
 			} else {
@@ -90,13 +90,21 @@ func checkStateTask(root, id string, task atmTaskState, docReports map[string]ma
 	if task.Report == "" {
 		return
 	}
-	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(task.Report))); err != nil {
+	if _, err := os.Stat(resolveArtifactPath(root, task.Report)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			warn(fmt.Sprintf(".atm/state.json task %q references missing detail report %s", id, task.Report))
 		} else {
 			warn(fmt.Sprintf(".atm/state.json task %q detail report %s cannot be checked: %v", id, task.Report, err))
 		}
 	}
+}
+
+func resolveArtifactPath(root, path string) string {
+	path = filepath.FromSlash(path)
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
 }
 
 func checkOrphanReports(root string, docReports map[string]marker.ATMReportMeta, stateIDs map[string]bool, warn func(string)) {
@@ -111,6 +119,35 @@ func checkOrphanReports(root string, docReports map[string]marker.ATMReportMeta,
 			continue
 		}
 		if stateIDs[id] {
+			continue
+		}
+		rel, relErr := filepath.Rel(root, reportFile)
+		if relErr != nil {
+			rel = reportFile
+		}
+		warn(fmt.Sprintf("orphan detail report %s has no matching report in the todo document or state", filepath.ToSlash(rel)))
+	}
+	checkOrphanTaskReports(root, docReports, stateIDs, warn)
+}
+
+func checkOrphanTaskReports(root string, docReports map[string]marker.ATMReportMeta, stateIDs map[string]bool, warn func(string)) {
+	entries, err := os.ReadDir(filepath.Join(root, "tasks"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+		if _, ok := docReports[id]; ok {
+			continue
+		}
+		if stateIDs[id] {
+			continue
+		}
+		reportFile := filepath.Join(root, "tasks", id, "report.md")
+		if _, err := os.Stat(reportFile); err != nil {
 			continue
 		}
 		rel, relErr := filepath.Rel(root, reportFile)

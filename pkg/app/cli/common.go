@@ -12,8 +12,6 @@ import (
 	urfavecli "github.com/urfave/cli/v3"
 )
 
-var defaultRunFiles = []string{"todo.txt", "todo.md", "toto.md"}
-
 type commandEnv struct {
 	Stdin  stdinFile
 	Stdout io.Writer
@@ -41,18 +39,10 @@ func defaultRunArgs(command *urfavecli.Command, args []string) []string {
 
 func isExplicitCLICommand(command *urfavecli.Command, arg string) bool {
 	switch arg {
-	case "help", "-h", "--help":
+	case "help", "-h", "--help", "-v", "--version":
 		return true
 	}
 	return command.Command(arg) != nil
-}
-
-func todoFilesFlag() *urfavecli.StringSliceFlag {
-	return &urfavecli.StringSliceFlag{Name: "file", Usage: "todo file path; repeat for multiple files"}
-}
-
-func commandFiles(cmd *urfavecli.Command) []string {
-	return cmd.StringSlice("file")
 }
 
 func writeIndentedJSON(stdout io.Writer, value any) error {
@@ -68,23 +58,11 @@ func rejectArgs(cmd *urfavecli.Command) error {
 	return nil
 }
 
-func resolveRunFiles(flagFiles []string, positional []string) ([]string, error) {
-	var files []string
-	files = append(files, flagFiles...)
-	files = append(files, positional...)
-	if len(files) > 0 {
-		return files, nil
+func resolveRunFiles(positional []string) ([]string, error) {
+	if len(positional) == 0 {
+		return nil, fmt.Errorf("no ATM file specified")
 	}
-	for _, candidate := range defaultRunFiles {
-		info, err := os.Stat(candidate)
-		if err == nil && !info.IsDir() {
-			return []string{candidate}, nil
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("stat default todo file %q: %w", candidate, err)
-		}
-	}
-	return nil, fmt.Errorf("no todo file specified and no default todo file found; looked for %s", strings.Join(defaultRunFiles, ", "))
+	return positional, nil
 }
 
 func outputDirForRunFile(base, file string, index, total int) string {
@@ -92,6 +70,54 @@ func outputDirForRunFile(base, file string, index, total int) string {
 		return base
 	}
 	return filepath.Join(base, fmt.Sprintf("%03d-%s", index+1, sanitizePathPart(filepath.Base(file))))
+}
+
+func registryScopeFlag() *urfavecli.BoolFlag {
+	return &urfavecli.BoolFlag{Name: "global", Aliases: []string{"g"}, Usage: "use the global registry instead of the project-local registry"}
+}
+
+func registryScopeName(global bool) string {
+	if global {
+		return "global"
+	}
+	return "local"
+}
+
+func atmRegistryPath(global bool, parts ...string) (string, error) {
+	if !global {
+		all := append([]string{".", ".atm"}, parts...)
+		return filepath.Join(all...), nil
+	}
+	root, err := os.UserConfigDir()
+	if err == nil && root != "" {
+		all := append([]string{root, "atm"}, parts...)
+		return filepath.Join(all...), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve global registry directory: %w", err)
+	}
+	all := append([]string{home, ".atm"}, parts...)
+	return filepath.Join(all...), nil
+}
+
+func registryFilePath(file string, global bool) (string, error) {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return "", err
+	}
+	if global {
+		return abs, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(cwd, abs)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(rel), nil
+	}
+	return abs, nil
 }
 
 func sanitizePathPart(value string) string {

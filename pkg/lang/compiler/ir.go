@@ -6,8 +6,10 @@ import (
 )
 
 type CompileOptions struct {
-	Root    string
-	Context string
+	Root                string
+	Context             string
+	NamedContexts       map[string]string
+	ContextRefsResolved bool
 }
 
 func AttachElseTask(task Task, elseTask Task) (Task, error) {
@@ -87,16 +89,20 @@ func lowerTaskASTToIR(index int, t taskAST) Task {
 	flow := lowerTaskASTToFlow(t)
 
 	return Task{
-		BlockIndex: index,
-		Prompt:     t.prompt,
-		Flow:       flow,
-		Vars:       CloneVars(t.vars),
-		Output:     cloneOutputSpec(t.output),
-		Return:     cloneReturnSpec(t.returnSpec),
-		DB:         cloneDBTaskConfig(t.db),
-		Skill:      cloneSkillTaskConfig(t.skill),
-		MCP:        cloneMCPTaskConfig(t.mcp),
-		Cursor:     cursorFromRunningInfo(t.running),
+		BlockIndex:  index,
+		Name:        t.name,
+		Context:     t.context,
+		ContextRefs: slices.Clone(t.contextRefs),
+		Prompt:      t.prompt,
+		Flow:        flow,
+		Vars:        CloneVars(t.vars),
+		Output:      cloneOutputSpec(t.output),
+		Return:      cloneReturnSpec(t.returnSpec),
+		DB:          cloneDBTaskConfig(t.db),
+		Skill:       cloneSkillTaskConfig(t.skill),
+		MCP:         cloneMCPTaskConfig(t.mcp),
+		Webhook:     cloneWebhookTaskConfig(t.webhook),
+		Cursor:      cursorFromRunningInfo(t.running),
 	}
 }
 
@@ -122,6 +128,8 @@ func lowerTaskASTToFlow(t taskAST) FlowNode {
 			nodes = append(nodes, FlowNode{Kind: FlowWait, Pool: op.Pool})
 		case astOpCall:
 			nodes = append(nodes, FlowNode{Kind: FlowCall, Call: op.Call})
+		case astOpWebhook:
+			nodes = append(nodes, FlowNode{Kind: FlowWebhook, Webhook: op.Webhook})
 		case astOpReturn:
 			nodes = append(nodes, FlowNode{Kind: FlowReturn, Return: op.Return})
 		}
@@ -220,6 +228,10 @@ func cloneMCPTaskConfig(config MCPTaskConfig) MCPTaskConfig {
 		Ignore:    slices.Clone(config.Ignore),
 		DefUse:    slices.Clone(config.DefUse),
 	}
+}
+
+func cloneWebhookTaskConfig(config WebhookTaskConfig) WebhookTaskConfig {
+	return WebhookTaskConfig{Use: slices.Clone(config.Use)}
 }
 
 func cloneOutputSpec(spec *OutputSpec) *OutputSpec {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,6 +94,75 @@ func TestServeDBReadonlyForcesReadAccess(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires write access") {
 		t.Fatalf("expected readonly access error, got %v", err)
+	}
+}
+
+func TestDBConfigRejectsUnknownFields(t *testing.T) {
+	_, err := parseDBServerConfig([]byte(`{"databases":[],"databasez":[]}`))
+	if err == nil || !strings.Contains(err.Error(), `unknown field "databasez"`) {
+		t.Fatalf("expected unknown field error, got %v", err)
+	}
+	if _, err := parseDBServerConfig([]byte(`{"databases":[{"name":"notes","path":"notes.json","scope":"global","persist":"run","access":"read","extra":true}]}`)); err == nil || !strings.Contains(err.Error(), `unknown field "extra"`) {
+		t.Fatalf("expected nested unknown field error, got %v", err)
+	}
+}
+
+func TestDBWriteRejectsMissingValues(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "notes.json")
+	server := newDBServer([]ir.DBRuntime{{
+		Name:   "notes",
+		Path:   dbPath,
+		Access: ir.DBAccessAdmin,
+	}}, false)
+	cases := []struct {
+		name string
+		tool string
+		args string
+		want string
+	}{
+		{
+			name: "singular value field",
+			tool: DBSetToolName,
+			args: `{"db":"notes","key":"k","value":"v"}`,
+			want: `unknown field "value"`,
+		},
+		{
+			name: "missing values",
+			tool: DBSetToolName,
+			args: `{"db":"notes","key":"k"}`,
+			want: "values is required",
+		},
+		{
+			name: "null values",
+			tool: DBAppendToolName,
+			args: `{"db":"notes","key":"k","values":null}`,
+			want: "values is required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := server.callTool(tc.tool, json.RawMessage(tc.args))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+	data, err := readDBFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("invalid writes should not create DB entries, got %#v", data)
+	}
+	if _, err := server.callTool(DBSetToolName, json.RawMessage(`{"db":"notes","key":"empty","values":[]}`)); err != nil {
+		t.Fatalf("empty values array should be accepted: %v", err)
+	}
+	values, found, err := readDBKey(dbPath, "empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || values == nil || len(values) != 0 {
+		t.Fatalf("expected empty values array, found=%v values=%#v", found, values)
 	}
 }
 

@@ -10,8 +10,9 @@ import (
 
 func mcpCommand(env commandEnv) *urfavecli.Command {
 	return &urfavecli.Command{
-		Name:  "mcp",
-		Usage: "run a temporary stdio MCP server",
+		Name:   "mcp",
+		Usage:  "run a temporary stdio MCP server",
+		Hidden: true,
 		Commands: []*urfavecli.Command{
 			mcpServerCommand("check", "run the todo check MCP server", func(args []string) error {
 				return mcp.RunCheckServerCLI(args, env.Stdin, env.Stdout, env.Stderr)
@@ -24,6 +25,9 @@ func mcpCommand(env commandEnv) *urfavecli.Command {
 			}),
 			mcpServerCommand("defs", "run the definitions MCP server", func(args []string) error {
 				return engine.RunDefsMCPServerCLI(args, env.Stdin, env.Stdout, env.Stderr)
+			}),
+			mcpServerCommand("webhook", "run the webhook MCP server", func(args []string) error {
+				return engine.RunWebhookMCPServerCLI(args, env.Stdin, env.Stdout, env.Stderr)
 			}),
 		},
 	}

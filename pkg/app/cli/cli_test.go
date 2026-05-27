@@ -3,13 +3,49 @@ package cli
 import (
 	"fmt"
 	"github.com/chinaykc/atm/pkg/lang/compiler"
-	"github.com/chinaykc/atm/pkg/runtime/store"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "atm-cli-test-config-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	_ = os.Setenv("XDG_CONFIG_HOME", dir)
+	_ = os.Setenv("APPDATA", dir)
+	_ = os.Setenv("HOME", dir)
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+func resultDocumentPathFromOutput(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if path, ok := strings.CutPrefix(line, "result document: "); ok {
+			return strings.TrimSpace(path)
+		}
+	}
+	t.Fatalf("missing result document line in output:\n%s", output)
+	return ""
+}
+
+func artifactsPathFromOutput(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if path, ok := strings.CutPrefix(line, "artifacts: "); ok {
+			return strings.TrimSpace(path)
+		}
+	}
+	t.Fatalf("missing artifacts line in output:\n%s", output)
+	return ""
+}
 
 func TestExitCodeClassifiesErrors(t *testing.T) {
 	if got := ExitCode(nil); got != ExitOK {
@@ -25,6 +61,41 @@ func TestExitCodeClassifiesErrors(t *testing.T) {
 	stateErr := StateInconsistentError{Err: fmt.Errorf("state/report mismatch")}
 	if got := ExitCode(fmt.Errorf("audit failed: %w", stateErr)); got != ExitStateInconsistent {
 		t.Fatalf("state error exit code = %d", got)
+	}
+}
+
+func TestInternalAndUnavailableCommandsHiddenFromRootHelp(t *testing.T) {
+	var out strings.Builder
+	if err := Run([]string{"-h"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\n   mcp") {
+		t.Fatalf("mcp command should be hidden from root help:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "\n   web") {
+		t.Fatalf("web command should not be exposed in root help:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "\n   exec") {
+		t.Fatalf("exec command should not be exposed in root help:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "\n   plan") {
+		t.Fatalf("plan command should not be exposed in root help:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "\n   untag") {
+		t.Fatalf("untag command should not be exposed in root help:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "\n   repair-ids") {
+		t.Fatalf("repair-ids command should not be exposed in root help:\n%s", out.String())
+	}
+}
+
+func TestVersionFlagPrintsBuildInfo(t *testing.T) {
+	var out strings.Builder
+	if err := Run([]string{"--version"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "atm version dev\n" {
+		t.Fatalf("unexpected version output: %q", got)
 	}
 }
 
@@ -45,15 +116,23 @@ func TestRunSubcommandExecutesPendingTasks(t *testing.T) {
 	t.Setenv("CODEX_LOG", logFile)
 
 	var out strings.Builder
-	if err := Run([]string{"run", "-file", file, "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
+	if err := Run([]string{"run", file, "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if normalizeDoneMarkersForTest(string(updated)) != "/args --yolo\nhello {{name}}\n[done]\n" {
-		t.Fatalf("unexpected todo content:\n%s", updated)
+	if string(updated) != "/args --yolo\nhello {{name}}\n" {
+		t.Fatalf("source file should remain unchanged:\n%s", updated)
+	}
+	resultPath := resultDocumentPathFromOutput(t, out.String())
+	result, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalizeDoneMarkersForTest(string(result)) != "/args --yolo\nhello {{name}}\n[done]\n" {
+		t.Fatalf("unexpected result content:\n%s", result)
 	}
 	log, err := os.ReadFile(logFile)
 	if err != nil {
@@ -61,6 +140,335 @@ func TestRunSubcommandExecutesPendingTasks(t *testing.T) {
 	}
 	if !strings.Contains(string(log), "args:exec --json --yolo -") || !strings.Contains(string(log), "hello {{name}}") {
 		t.Fatalf("unexpected codex log:\n%s", log)
+	}
+}
+
+func TestRunSubcommandAppendToSourceDuringRunReachesActiveWorkFile(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "todo.txt")
+	logFile := filepath.Join(dir, "codex.log")
+	started := filepath.Join(dir, "started")
+	release := filepath.Join(dir, "release")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte("/task\nslow first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+prompt=$(cat)
+printf '%s
+---
+' "$prompt" >> "$CODEX_LOG"
+case "$prompt" in
+*"slow first"*)
+  : > "$STARTED"
+  while [ ! -f "$RELEASE" ]; do sleep 0.05; done
+  ;;
+esac
+`
+	if err := os.WriteFile(codex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_LOG", logFile)
+	t.Setenv("STARTED", started)
+	t.Setenv("RELEASE", release)
+
+	var runOut strings.Builder
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run([]string{"run", file, "-codex", codex}, &runOut, &runOut)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first task did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var appendOut strings.Builder
+	if err := RunAppend(file, "/task\nsecond\n", &appendOut); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not finish")
+	}
+
+	restored, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != "/task\nslow first\n" {
+		t.Fatalf("source file should be restored unchanged, got:\n%s", restored)
+	}
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "slow first") || !strings.Contains(string(log), "second") {
+		t.Fatalf("expected current run to execute appended task, log:\n%s\nappend output:\n%s", log, appendOut.String())
+	}
+	resultPath := resultDocumentPathFromOutput(t, runOut.String())
+	result, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result), "second") {
+		t.Fatalf("expected result document to include appended task:\n%s", result)
+	}
+}
+
+func TestRunSubcommandInjectsDocumentFlags(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "todo.md")
+	logFile := filepath.Join(dir, "codex.log")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte("/flag string name user name\n\n/task\nhello {{name}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, []byte("#!/bin/sh\ncat >> \"$CODEX_LOG\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_LOG", logFile)
+
+	var out strings.Builder
+	if err := Run([]string{"run", file, "-name", "Ada", "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(log)) != "hello Ada" {
+		t.Fatalf("unexpected codex log: %q", log)
+	}
+}
+
+func TestRunHidesImportedFilesAndExecutesWorkingCopies(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	withWorkingDirectory(t, dir)
+	file := filepath.Join(dir, "todo.md")
+	importFile := filepath.Join(dir, "lib.todo.md")
+	logFile := filepath.Join(dir, "codex.log")
+	codex := filepath.Join(dir, "codex")
+	mainOriginal := "/import lib.todo.md\n\n/let msg /call message\n{{msg}}\n"
+	importOriginal := "/def message\n/return from import\n"
+	if err := os.WriteFile(file, []byte(mainOriginal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(importFile, []byte(importOriginal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat \"$ORIG_IMPORT\" > \"$CODEX_LOG.import\"\ncat >> \"$CODEX_LOG\"\n"
+	if err := os.WriteFile(codex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_LOG", logFile)
+	t.Setenv("ORIG_IMPORT", importFile)
+
+	var out strings.Builder
+	if err := Run([]string{"run", file, "-codex", codex}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(file); string(got) != mainOriginal {
+		t.Fatalf("main source should be restored unchanged:\n%s", got)
+	}
+	if got, _ := os.ReadFile(importFile); string(got) != importOriginal {
+		t.Fatalf("import source should be restored unchanged:\n%s", got)
+	}
+	seenImport, err := os.ReadFile(logFile + ".import")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(seenImport) != placeholderContent {
+		t.Fatalf("agent should see placeholder at original import path, got:\n%s", seenImport)
+	}
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(log)) != "from import" {
+		t.Fatalf("expected prompt from working import copy, got %q", log)
+	}
+}
+
+func TestResumeRestoreSourceRestoresMissingSourceFromRunCopy(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "todo.md")
+	importFile := filepath.Join(dir, "lib.todo.md")
+	codex := filepath.Join(dir, "codex")
+	original := "/import lib.todo.md\n\n/task\nrestore me\n"
+	importOriginal := "/def note\n/return restored import\n"
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(importFile, []byte(importOriginal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := Run([]string{"run", file, "-codex", codex}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	_ = artifactsPathFromOutput(t, out.String())
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(importFile); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := Run([]string{"resume", "--restore-source"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != original {
+		t.Fatalf("unexpected restored source:\n%s", restored)
+	}
+	restoredImport, err := os.ReadFile(importFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restoredImport) != importOriginal {
+		t.Fatalf("unexpected restored import source:\n%s", restoredImport)
+	}
+}
+
+func TestResumeLastFlagIsAcceptedForManagedRunResume(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	var out strings.Builder
+	err := Run([]string{"resume", "--last"}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "no unfinished ATM run found") {
+		t.Fatalf("expected --last to select unfinished runs, got %v\n%s", err, out.String())
+	}
+}
+
+func TestDynamicCommandRunsCopyWithoutUpdatingSourceDocument(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	if err := os.MkdirAll(filepath.Join(dir, ".atm", "flag"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+	file := filepath.Join(dir, ".atm", "flag", "greet.todo.md")
+	original := "/flag string name user name\n\n/task\nhello {{name}}\n"
+	logFile := filepath.Join(dir, "codex.log")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, []byte("#!/bin/sh\ncat >> \"$CODEX_LOG\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_LOG", logFile)
+
+	var out strings.Builder
+	if commands, err := discoverDynamicCommands(); err != nil {
+		t.Fatal(err)
+	} else if len(commands) != 0 {
+		t.Fatalf("expected no dynamic command before registration, got %#v", commands)
+	}
+	if err := Run([]string{"flag", "register", file}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"greet", "-name", "Ada", "-codex", codex}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(updated) != original {
+		t.Fatalf("dynamic command updated source document:\n%s", updated)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".atm", "commands", "greet")); err != nil {
+		t.Fatalf("expected command artifacts: %v", err)
+	}
+}
+
+func TestFlagScanRegistersProjectLocalDynamicCommands(t *testing.T) {
+	dir := t.TempDir()
+	withWorkingDirectory(t, dir)
+	if err := os.MkdirAll(filepath.Join(".atm", "flag"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".atm", "flag", "review.todo.md"), []byte("/task\nreview\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"flag", "scan"}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	commands, err := discoverDynamicCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 || commands[0].Name != "review" || commands[0].File != ".atm/flag/review.todo.md" {
+		t.Fatalf("unexpected dynamic commands: %#v", commands)
+	}
+}
+
+func TestFlagRegisterGlobalWritesGlobalRegistry(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	withWorkingDirectory(t, dir)
+	file := filepath.Join(dir, "review.todo.md")
+	if err := os.WriteFile(file, []byte("/task\nreview\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"flag", "register", file, "--name", "review", "-g"}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".atm", "flag", "index.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected no local registry, stat err=%v", err)
+	}
+	globalPath, err := dynamicRegistryPathForScope(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"name": "review"`) || !strings.Contains(string(data), file) {
+		t.Fatalf("unexpected global registry:\n%s", data)
 	}
 }
 
@@ -80,7 +488,7 @@ func TestDefaultRunStillExecutesPendingTasks(t *testing.T) {
 	t.Setenv("CODEX_LOG", logFile)
 
 	var out strings.Builder
-	if err := Run([]string{"-file", file, "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
+	if err := Run([]string{file, "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	log, err := os.ReadFile(logFile)
@@ -92,37 +500,19 @@ func TestDefaultRunStillExecutesPendingTasks(t *testing.T) {
 	}
 }
 
-func TestExecSubcommandRunsPendingSnapshot(t *testing.T) {
-	requirePOSIXShell(t)
-
-	dir := t.TempDir()
-	file := filepath.Join(dir, "todo.txt")
-	logFile := filepath.Join(dir, "codex.log")
-	codex := filepath.Join(dir, "codex")
-	if err := os.WriteFile(file, []byte("/task\nsnapshot prompt\n"), 0o644); err != nil {
+func TestExecSubcommandIsRemoved(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "todo.txt")
+	if err := os.WriteFile(file, []byte("/task\nalready done [done]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(codex, []byte("#!/bin/sh\ncat >> \"$CODEX_LOG\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("CODEX_LOG", logFile)
-
 	var out strings.Builder
-	if err := Run([]string{"exec", "-codex", codex, "-output", filepath.Join(dir, "out"), file}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	log, err := os.ReadFile(logFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(log)) != "snapshot prompt" {
-		t.Fatalf("unexpected codex log: %q", log)
+	err := Run([]string{"exec", file}, &out, &out)
+	if err == nil {
+		t.Fatal("expected removed exec command to fail")
 	}
 }
 
-func TestDefaultRunDiscoversTodoMarkdown(t *testing.T) {
-	requirePOSIXShell(t)
-
+func TestDefaultRunRequiresExplicitTodoFile(t *testing.T) {
 	dir := t.TempDir()
 	wd, err := os.Getwd()
 	if err != nil {
@@ -136,26 +526,14 @@ func TestDefaultRunDiscoversTodoMarkdown(t *testing.T) {
 			t.Fatalf("restore working directory: %v", err)
 		}
 	})
-	logFile := filepath.Join(dir, "codex.log")
-	codex := filepath.Join(dir, "codex")
 	if err := os.WriteFile("todo.md", []byte("/task\nmarkdown prompt\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(codex, []byte("#!/bin/sh\ncat >> \"$CODEX_LOG\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("CODEX_LOG", logFile)
 
 	var out strings.Builder
-	if err := Run([]string{"-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	log, err := os.ReadFile(logFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(log)) != "markdown prompt" {
-		t.Fatalf("unexpected codex log: %q", log)
+	err = Run([]string{"run"}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "no ATM file specified") {
+		t.Fatalf("expected explicit-file error, got %v", err)
 	}
 }
 
@@ -180,7 +558,7 @@ func TestRunQueuesMultipleInputFiles(t *testing.T) {
 	t.Setenv("CODEX_LOG", logFile)
 
 	var out strings.Builder
-	if err := Run([]string{"run", "-codex", codex, "-output", outDir, first, second}, &out, &out); err != nil {
+	if err := Run([]string{first, second, "-codex", codex, "-output", outDir}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	log, err := os.ReadFile(logFile)
@@ -198,7 +576,7 @@ func TestRunQueuesMultipleInputFiles(t *testing.T) {
 	}
 }
 
-func TestRunQueuesRepeatedFileFlags(t *testing.T) {
+func TestRunQueuesPositionalFiles(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "one.txt")
 	second := filepath.Join(dir, "two.txt")
@@ -209,11 +587,23 @@ func TestRunQueuesRepeatedFileFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"run", "-file", first, "-file", second, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
+	if err := Run([]string{"run", first, second, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "atm run file 1/2") || !strings.Contains(out.String(), "atm run file 2/2") {
 		t.Fatalf("expected queued file progress, got:\n%s", out.String())
+	}
+}
+
+func TestRunRejectsRemovedFileFlag(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "todo.txt")
+	if err := os.WriteFile(file, []byte("/task\nalready done [done]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	err := Run([]string{"run", "-file", file}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("expected removed -file flag to fail, got %v", err)
 	}
 }
 
@@ -223,7 +613,7 @@ func TestPlanSubcommandPrintsDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "flow: For(n in [0 1]) -> Go -> Execute") {
@@ -250,7 +640,7 @@ func TestPlanSubcommandPrintsDynamicLoopSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	var text strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &text, &text); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &text, &text); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -266,7 +656,7 @@ func TestPlanSubcommandPrintsDynamicLoopSummary(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"loops": [`, `"mode": "dynamic"`, `"source": "range(1, 4)"`, `"sourceKind": "expr"`, `"until": "exist(\"done\")"`, `"untilKind": "expr"`} {
@@ -283,7 +673,7 @@ func TestPlanSubcommandPrintsAsyncJoins(t *testing.T) {
 		t.Fatal(err)
 	}
 	var text strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &text, &text); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &text, &text); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -296,7 +686,7 @@ func TestPlanSubcommandPrintsAsyncJoins(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"async": {`, `"background": [`, `"joins": [`, `"waitTask": 2`, `"pool": "reviewer"`, `"fanout": "For(area in [api docs])"`} {
@@ -322,7 +712,7 @@ func TestPlanSubcommandPrintsVariableRefs(t *testing.T) {
 	}
 
 	var text strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &text, &text); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &text, &text); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -338,7 +728,7 @@ func TestPlanSubcommandPrintsVariableRefs(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"variables": [`, `"source": "global-let"`, `"source": "task-let"`, `"source": "task-lazy-bash"`, `"source": "loop"`, `"source": "unresolved"`} {
@@ -354,7 +744,7 @@ func TestPlanSubcommandPrintsRuntimeSummary(t *testing.T) {
 		"/def inspect",
 		"/return ok",
 		"",
-		"/resume",
+		"/resume alpha",
 		"/args --model fast",
 		"/cd --must-exist backend",
 		"/bash echo prepare",
@@ -367,12 +757,12 @@ func TestPlanSubcommandPrintsRuntimeSummary(t *testing.T) {
 	}
 
 	var text strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &text, &text); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &text, &text); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"runtime: resume; args=--model fast; cd=backend (must-exist); bash=1; lazy=lazy:call(inspect)",
-		"flow: Cd(backend, must-exist) -> Bash -> LazyCall(inspect -> lazy) -> Execute [resume, args=--model fast]",
+		"runtime: resume=alpha; args=--model fast; cd=backend (must-exist); bash=1; lazy=lazy:call(inspect)",
+		"flow: Cd(backend, must-exist) -> Bash -> LazyCall(inspect -> lazy) -> Execute [resume=alpha, args=--model fast]",
 	} {
 		if !strings.Contains(text.String(), want) {
 			t.Fatalf("expected plan runtime to contain %q, got:\n%s", want, text.String())
@@ -380,7 +770,7 @@ func TestPlanSubcommandPrintsRuntimeSummary(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"runtime": {`, `"resume": true`, `"args": [`, `"workdirs": [`, `"mustExist": true`, `"bash": [`, `"lazyProviders": [`} {
@@ -410,7 +800,7 @@ func TestPlanSubcommandPrintsContextSummary(t *testing.T) {
 	}
 
 	var text strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &text, &text); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &text, &text); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(text.String(), "context: ") || !strings.Contains(text.String(), "# Release") {
@@ -418,7 +808,7 @@ func TestPlanSubcommandPrintsContextSummary(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"context": {`, `"lines":`, `"chars":`, `"preview": "# Release"`} {
@@ -434,15 +824,15 @@ func TestPlanSubcommandAcceptsPositionalFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"plan", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "atm plan dry-run: "+file) {
+	if !strings.Contains(out.String(), "atm check plan dry-run: "+file) {
 		t.Fatalf("unexpected plan output:\n%s", out.String())
 	}
 }
 
-func TestPlanSubcommandDiscoversDefaultTodoMarkdown(t *testing.T) {
+func TestPlanSubcommandRequiresExplicitFile(t *testing.T) {
 	dir := t.TempDir()
 	wd, err := os.Getwd()
 	if err != nil {
@@ -460,11 +850,9 @@ func TestPlanSubcommandDiscoversDefaultTodoMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"plan", "-json"}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), `"source": "todo.md"`) {
-		t.Fatalf("expected todo.md plan output, got:\n%s", out.String())
+	err = Run([]string{"check", "--plan", "-json"}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "no ATM file specified") {
+		t.Fatalf("expected explicit-file error, got %v", err)
 	}
 }
 
@@ -476,18 +864,18 @@ func TestPlanSubcommandAcceptsFlagsAfterPositionalFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"plan", file, "-html", htmlFile}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file, "-html", htmlFile}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(htmlFile); err != nil {
 		t.Fatalf("expected html plan file: %v", err)
 	}
-	if !strings.Contains(out.String(), "atm plan HTML:") {
+	if !strings.Contains(out.String(), "atm check plan HTML:") {
 		t.Fatalf("expected html path output, got:\n%s", out.String())
 	}
 
 	out.Reset()
-	if err := Run([]string{"plan", file, "-json"}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file, "-json"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), `"source": "`+file+`"`) {
@@ -505,7 +893,7 @@ func TestPlanPreviewExecutesLazyBashProviders(t *testing.T) {
 	}
 
 	var dry strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &dry, &dry); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &dry, &dry); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -516,7 +904,7 @@ func TestPlanPreviewExecutesLazyBashProviders(t *testing.T) {
 	}
 
 	var preview strings.Builder
-	if err := Run([]string{"plan", "--preview", "-file", file}, &preview, &preview); err != nil {
+	if err := Run([]string{"check", "--plan", "--preview", file}, &preview, &preview); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -533,7 +921,7 @@ func TestPlanPreviewExecutesLazyBashProviders(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "--preview", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "--preview", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"preview": [`, `"name": "name"`, `"executed": true`, `"value": "previewed"`} {
@@ -560,7 +948,7 @@ func TestPlanPreviewExecutesStaticLazyCallProviders(t *testing.T) {
 	}
 
 	var preview strings.Builder
-	if err := Run([]string{"plan", "--preview", "-file", file}, &preview, &preview); err != nil {
+	if err := Run([]string{"check", "--plan", "--preview", file}, &preview, &preview); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -573,7 +961,7 @@ func TestPlanPreviewExecutesStaticLazyCallProviders(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "--preview", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "--preview", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"kind": "call"`, `"name": "city"`, `"executed": true`, `"value": "Paris"`} {
@@ -606,7 +994,7 @@ func TestCheckSubcommandValidatesWithoutRunning(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if err := Run([]string{"check", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"atm check ok:", "blocks: 2", "tasks: 1", "definitions: 1", "resources: 1"} {
@@ -616,7 +1004,7 @@ func TestCheckSubcommandValidatesWithoutRunning(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := Run([]string{"check", "-json", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", "-json", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"files": [`, `"tasks": 1`, `"definitions": 1`} {
@@ -632,12 +1020,12 @@ func TestCheckSubcommandRejectsInvalidDSL(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"check", "-file", file}, &out, &out); err == nil {
+	if err := Run([]string{"check", file}, &out, &out); err == nil {
 		t.Fatal("expected invalid DSL to fail")
 	}
 
 	out.Reset()
-	if err := Run([]string{"check", "-json", "-file", file}, &out, &out); err == nil {
+	if err := Run([]string{"check", "-json", file}, &out, &out); err == nil {
 		t.Fatal("expected invalid DSL JSON check to fail")
 	}
 	for _, want := range []string{`"diagnostics": [`, `"severity": "error"`, `"source": "` + file + `"`, `"block": 1`, `"line": 1`, `"column": 1`, "requires a parenthesized expression"} {
@@ -653,7 +1041,7 @@ func TestCheckSubcommandReportsWarningsWithoutFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"check", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "warning:") || !strings.Contains(out.String(), "without a later /wait") {
@@ -661,7 +1049,7 @@ func TestCheckSubcommandReportsWarningsWithoutFailing(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := Run([]string{"check", "-json", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", "-json", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"severity": "warning"`, "without a later /wait"} {
@@ -690,7 +1078,7 @@ func TestCheckAndPlanReportLazyProviderWarnings(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if err := Run([]string{"check", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"warning:", "lazy provider with possible side effects", "lazy definition provider", "/return /bash"} {
@@ -700,7 +1088,7 @@ func TestCheckAndPlanReportLazyProviderWarnings(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := Run([]string{"plan", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"LazyBash(changed)", "LazyCall(maker -> made)", "lazy provider with possible side effects"} {
@@ -745,7 +1133,7 @@ func TestCheckSubcommandReportsATMArtifactWarnings(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if err := Run([]string{"check", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -762,7 +1150,7 @@ func TestCheckSubcommandReportsATMArtifactWarnings(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := Run([]string{"check", "-json", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"check", "-json", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"severity": "warning"`, `"message": "ATM report id \"review-docs-abc123\" status mismatch: document=done state=running"`} {
@@ -817,7 +1205,7 @@ func TestReportSubcommandSummarizesATMState(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if err := Run([]string{"report", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"report", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"atm report:", "done: 1", "failed: 1", "draft: 1", "failures:", "failed-task-def", "orphan reports:", "orphan-task", "lonely", "recent logs:", "out/task-002.log"} {
@@ -827,12 +1215,42 @@ func TestReportSubcommandSummarizesATMState(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := Run([]string{"report", "-json", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"report", "-json", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"counts": {`, `"failed": 1`, `"orphans": [`, `"id": "orphan-task"`, `"source": "sha256:orphan-source"`, `"rendered": "sha256:orphan-rendered"`} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected JSON report to contain %q, got:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestReportDefaultsToLatestRunForCurrentProject(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	withWorkingDirectory(t, dir)
+	t.Setenv("ATM_HOME", filepath.Join(dir, "home"))
+	file := filepath.Join(dir, "todo.txt")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte("/task\nSay hello.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'done\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := Run([]string{"run", file, "-codex", codex}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := Run([]string{"report"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"atm report:", "run:", "source: " + file, "done: 1"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("expected report output to contain %q, got:\n%s", want, out.String())
 		}
 	}
 }
@@ -956,12 +1374,12 @@ func TestRepairIDsSubcommandRewritesDuplicateReportIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var checkOut strings.Builder
-	if err := Run([]string{"check", "-file", file}, &checkOut, &checkOut); err == nil {
+	if err := Run([]string{"check", file}, &checkOut, &checkOut); err == nil {
 		t.Fatal("expected duplicate id check to fail before repair")
 	}
 
 	var out strings.Builder
-	if err := Run([]string{"repair-ids", file}, &out, &out); err != nil {
+	if err := Run([]string{"clean", "--repair-ids", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "repaired 1 duplicate ATM report id(s)") || !strings.Contains(out.String(), "block 2: dup -> two-") {
@@ -980,7 +1398,7 @@ func TestRepairIDsSubcommandRewritesDuplicateReportIDs(t *testing.T) {
 	}
 
 	checkOut.Reset()
-	if err := Run([]string{"check", "-file", file}, &checkOut, &checkOut); err != nil {
+	if err := Run([]string{"check", file}, &checkOut, &checkOut); err != nil {
 		t.Fatalf("expected duplicate id check to pass after repair, got %v:\n%s", err, checkOut.String())
 	}
 }
@@ -1018,7 +1436,7 @@ func TestPlanSubcommandPrintsTaskToolingAndControls(t *testing.T) {
 		"Stop.",
 		"",
 		"",
-		"/resume",
+		"/resume alpha",
 		"/args --yolo",
 		"/db use scratch access:append",
 		"/db access decisions read",
@@ -1039,7 +1457,7 @@ func TestPlanSubcommandPrintsTaskToolingAndControls(t *testing.T) {
 	}
 
 	var text strings.Builder
-	if err := Run([]string{"plan", "-file", file}, &text, &text); err != nil {
+	if err := Run([]string{"check", "--plan", file}, &text, &text); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -1054,7 +1472,7 @@ func TestPlanSubcommandPrintsTaskToolingAndControls(t *testing.T) {
 		"conditions:",
 		"if expr(exist(outputDir(\"gate.json\"))): then execute when true; skipped when false; else skipped when true; execute when false",
 		"resources: db=decisions(write,global/run)",
-		"flow: Execute [resume, args=--yolo]",
+		"flow: Execute [resume=alpha, args=--yolo]",
 		"db: use scratch access=append; access decisions read",
 		"skill: use reviewer",
 		"mcp: use helper; def use inspect",
@@ -1068,7 +1486,7 @@ func TestPlanSubcommandPrintsTaskToolingAndControls(t *testing.T) {
 	}
 
 	var jsonOut strings.Builder
-	if err := Run([]string{"plan", "-json", "-file", file}, &jsonOut, &jsonOut); err != nil {
+	if err := Run([]string{"check", "--plan", "-json", file}, &jsonOut, &jsonOut); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"document": {`, `"sections": [`, `"title": "//setup"`, `"controls"`, `"conditions": [`, `"then": "execute when true; skipped when false"`, `"else": "skipped when true; execute when false"`, `"line":`, `"scope": [`, `"### //gate"`, `"decision": {`, `"action": "conditional-execute"`, `"skips": [`, `"conditionKind": "expr"`, `"flow": {`, `"children": [`, `"db": {`, `"resources": {`, `"dbs": [`, `"defMCPs": [`, `"defUse": [`} {
@@ -1086,7 +1504,7 @@ func TestPlanSubcommandWritesHTMLFlowchart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"plan", "-file", file, "-html", htmlFile}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file, "-html", htmlFile}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(htmlFile)
@@ -1099,7 +1517,7 @@ func TestPlanSubcommandWritesHTMLFlowchart(t *testing.T) {
 			t.Fatalf("expected HTML plan to contain %q, got:\n%s", want, text)
 		}
 	}
-	if !strings.Contains(out.String(), "atm plan HTML:") {
+	if !strings.Contains(out.String(), "atm check plan HTML:") {
 		t.Fatalf("expected html path output, got:\n%s", out.String())
 	}
 }
@@ -1154,7 +1572,7 @@ func TestPlanSubcommandHTMLShowsStructureAndDocumentContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"plan", "-file", file, "-html", htmlFile}, &out, &out); err != nil {
+	if err := Run([]string{"check", "--plan", file, "-html", htmlFile}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	html, err := os.ReadFile(htmlFile)
@@ -1189,7 +1607,7 @@ func TestFormatSubcommandMovesMarkersToOwnLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"format", "-file", file}, &out, &out); err != nil {
+	if err := Run([]string{"format", file}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := os.ReadFile(file)
@@ -1219,67 +1637,32 @@ func TestAppendFormatsAndTargetsTodoFile(t *testing.T) {
 	}
 }
 
-func TestAppendTargetsActiveTodoFile(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "todo.txt")
-	if err := os.WriteFile(file, []byte("/task\nrunning\n"), 0o644); err != nil {
+func TestAppendSubcommandAcceptsPositionalTodoFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "todo.txt")
+	if err := os.WriteFile(file, []byte("/task\nexisting\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := store.PrepareWorkspace(file, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer workspace.Restore()
-
 	var out strings.Builder
-	if err := RunAppend(file, "/task\nnew work\n", &out); err != nil {
+	if err := Run([]string{"append", file, "/task\nnew work\n"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	active, err := os.ReadFile(workspace.Active)
+	updated, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(active), "new work") {
-		t.Fatalf("expected append to target active file, got %q", active)
-	}
-	if _, err := os.Stat(file); !os.IsNotExist(err) {
-		t.Fatalf("expected original file to remain moved while active, stat err=%v", err)
+	if !strings.Contains(string(updated), "/task\nnew work\n") {
+		t.Fatalf("unexpected content: %q", updated)
 	}
 }
 
-func TestUntagSubcommandRemovesMarkers(t *testing.T) {
+func TestUntagSubcommandIsRemoved(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "todo.txt")
 	if err := os.WriteFile(file, []byte("/task\ndone [done]\n\n/task\nrunning [running|20260508-14:32|1x]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := Run([]string{"untag", "-file", file}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(updated) != "/task\ndone\n\n/task\nrunning\n" {
-		t.Fatalf("unexpected content: %q", updated)
-	}
-}
-
-func TestUntagSubcommandRemovesATMQuoteBlocks(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "todo.txt")
-	content := "/task\ndone\n> [!ATM]\n> status: done\n> started: 2026-05-18 10:00\n> finished: 2026-05-18 10:01\n> duration: 1m\n> runs: 1x\n"
-	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out strings.Builder
-	if err := Run([]string{"untag", "-file", file}, &out, &out); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(updated) != "/task\ndone\n" {
-		t.Fatalf("unexpected content: %q", updated)
+	err := Run([]string{"untag", file}, &out, &out)
+	if err == nil {
+		t.Fatal("expected removed untag command to fail")
 	}
 }

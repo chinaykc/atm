@@ -72,49 +72,68 @@ func parseDBTaskLine(line string) (DBTaskConfig, bool, error) {
 	if len(fields) == 0 || fields[0] != "/db" {
 		return DBTaskConfig{}, false, nil
 	}
-	if len(fields) < 2 {
-		return DBTaskConfig{}, true, fmt.Errorf("/db requires subcommand")
+	out, next, err := parseDBTaskFields(fields, 0)
+	if err != nil {
+		return DBTaskConfig{}, true, err
 	}
-	var out DBTaskConfig
-	switch fields[1] {
-	case "use":
-		names, access, err := parseDBNamesWithOptionalAccess(fields[2:])
-		if err != nil {
-			return DBTaskConfig{}, true, err
-		}
-		if len(names) == 0 {
-			return DBTaskConfig{}, true, fmt.Errorf("/db use requires at least one name")
-		}
-		out.Use = append(out.Use, DBUse{Names: names, Access: access})
-	case "access":
-		if len(fields) < 4 {
-			return DBTaskConfig{}, true, fmt.Errorf("/db access requires name(s) and access level")
-		}
-		access, err := parseDBAccess(fields[len(fields)-1])
-		if err != nil {
-			return DBTaskConfig{}, true, err
-		}
-		names := slices.Clone(fields[2 : len(fields)-1])
-		if err := validateDBNamesOrStar(names); err != nil {
-			return DBTaskConfig{}, true, err
-		}
-		out.Access = append(out.Access, DBAccessRule{Names: names, Access: access})
-	case "ignore":
-		if len(fields) == 2 {
-			out.IgnoreAll = true
-			return out, true, nil
-		}
-		names := slices.Clone(fields[2:])
-		if err := validateDBNames(names); err != nil {
-			return DBTaskConfig{}, true, err
-		}
-		out.Ignore = append(out.Ignore, names...)
-	case "new":
-		return DBTaskConfig{}, true, fmt.Errorf("/db new must be written as a standalone global block")
-	default:
-		return DBTaskConfig{}, true, fmt.Errorf("unsupported /db subcommand %q", fields[1])
+	if next != len(fields) {
+		return DBTaskConfig{}, true, fmt.Errorf("unexpected command argument %q", fields[next])
 	}
 	return out, true, nil
+}
+
+func parseDBTaskFields(fields []string, start int) (DBTaskConfig, int, error) {
+	if start >= len(fields) || fields[start] != "/db" {
+		return DBTaskConfig{}, start, fmt.Errorf("expected /db")
+	}
+	if start+1 >= len(fields) || isCommandToken(fields[start+1]) {
+		return DBTaskConfig{}, start, fmt.Errorf("/db requires subcommand")
+	}
+	var out DBTaskConfig
+	switch fields[start+1] {
+	case "use":
+		args, next := collectCommandArgs(fields, start+2)
+		names, access, err := parseDBNamesWithOptionalAccess(args)
+		if err != nil {
+			return DBTaskConfig{}, start, err
+		}
+		if len(names) == 0 {
+			return DBTaskConfig{}, start, fmt.Errorf("/db use requires at least one name")
+		}
+		out.Use = append(out.Use, DBUse{Names: names, Access: access})
+		return out, next, nil
+	case "access":
+		args, next := collectCommandArgs(fields, start+2)
+		if len(args) < 2 {
+			return DBTaskConfig{}, start, fmt.Errorf("/db access requires name(s) and access level")
+		}
+		access, err := parseDBAccess(args[len(args)-1])
+		if err != nil {
+			return DBTaskConfig{}, start, err
+		}
+		names := slices.Clone(args[:len(args)-1])
+		if err := validateDBNamesOrStar(names); err != nil {
+			return DBTaskConfig{}, start, err
+		}
+		out.Access = append(out.Access, DBAccessRule{Names: names, Access: access})
+		return out, next, nil
+	case "ignore":
+		args, next := collectCommandArgs(fields, start+2)
+		if len(args) == 0 {
+			out.IgnoreAll = true
+			return out, next, nil
+		}
+		names := slices.Clone(args)
+		if err := validateDBNames(names); err != nil {
+			return DBTaskConfig{}, start, err
+		}
+		out.Ignore = append(out.Ignore, names...)
+		return out, next, nil
+	case "new":
+		return DBTaskConfig{}, start, fmt.Errorf("/db new must be written as a standalone global block")
+	default:
+		return DBTaskConfig{}, start, fmt.Errorf("unsupported /db subcommand %q", fields[start+1])
+	}
 }
 
 func parseDBNamesWithOptionalAccess(fields []string) ([]string, DBAccess, error) {

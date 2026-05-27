@@ -31,8 +31,14 @@ type Options struct {
 	Stderr       io.Writer
 	MessageLimit int
 	OutputDir    string
+	TaskDir      string
 	GlobalJobs   int
-	Snapshot     bool
+	Vars         map[string]any
+}
+
+type Result struct {
+	Messages          []compiler.OutputMessage
+	StructuredOutputs [][]byte
 }
 
 type Engine struct {
@@ -46,6 +52,7 @@ type Engine struct {
 	stdout     io.Writer
 	stderr     io.Writer
 	outputs    *outputRegistry
+	taskDir    string
 	async      *asyncGroup
 	pools      *poolManager
 	defs       map[string]compiler.Definition
@@ -56,15 +63,17 @@ type Engine struct {
 	skillItems []compiler.SkillDecl
 	mcps       map[string]compiler.MCPDecl
 	mcpItems   []compiler.MCPDecl
+	webhooks   map[string]compiler.WebhookDecl
+	vars       map[string]any
 	bashVars   map[string]string
 	callSeq    int
 	start      time.Time
 	messages   int
-	snapshot   bool
-	blockLimit int
 	abandoning bool
 	mu         sync.Mutex
 	stateMu    sync.Mutex
+	resultMu   sync.Mutex
+	result     Result
 }
 
 type scopedRuntimeLet struct {
@@ -105,6 +114,13 @@ func New(opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	taskDir := opts.TaskDir
+	if strings.TrimSpace(taskDir) == "" {
+		taskDir = filepath.Join(outputs.dirPath(), "tasks")
+	}
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create task artifact directory: %w", err)
+	}
 	var stdMu sync.Mutex
 	return &Engine{
 		filePath:   opts.FilePath,
@@ -117,33 +133,62 @@ func New(opts Options) (*Engine, error) {
 		stdout:     lockedWriter{w: opts.Stdout, mu: &stdMu},
 		stderr:     lockedWriter{w: opts.Stderr, mu: &stdMu},
 		outputs:    outputs,
+		taskDir:    taskDir,
 		async:      newAsyncGroup(),
 		pools:      newPoolManager(opts.GlobalJobs),
 		defs:       make(map[string]compiler.Definition),
 		dbs:        make(map[string]compiler.DBDecl),
 		skills:     make(map[string]compiler.SkillDecl),
 		mcps:       make(map[string]compiler.MCPDecl),
+		webhooks:   make(map[string]compiler.WebhookDecl),
+		vars:       compiler.CloneVars(opts.Vars),
 		bashVars:   make(map[string]string),
 		start:      time.Now(),
 		messages:   opts.MessageLimit,
-		snapshot:   opts.Snapshot,
 	}, nil
 }
 
-func (e *Engine) Run(ctx context.Context) (runErr error) {
-	workspace, err := store.PrepareWorkspace(e.filePath, e.stderr)
+func RunCapture(ctx context.Context, opts Options) (Result, error) {
+	e, err := New(opts)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := e.Run(ctx); err != nil {
+		return e.Result(), err
+	}
+	return e.Result(), nil
+}
+
+func (e *Engine) Result() Result {
+	e.resultMu.Lock()
+	defer e.resultMu.Unlock()
+	out := Result{
+		Messages:          slices.Clone(e.result.Messages),
+		StructuredOutputs: make([][]byte, len(e.result.StructuredOutputs)),
+	}
+	for i := range e.result.StructuredOutputs {
+		out.StructuredOutputs[i] = slices.Clone(e.result.StructuredOutputs[i])
+	}
+	return out
+}
+
+func (e *Engine) recordResult(messages []compiler.OutputMessage, structured []byte) {
+	e.resultMu.Lock()
+	defer e.resultMu.Unlock()
+	e.result.Messages = append(e.result.Messages, messages...)
+	if len(structured) > 0 {
+		e.result.StructuredOutputs = append(e.result.StructuredOutputs, slices.Clone(structured))
+	}
+}
+
+func (e *Engine) Run(ctx context.Context) (runErr error) {
+	if err := e.loadDefinitions(e.filePath); err != nil {
 		return err
 	}
-	e.filePath = workspace.Active
-	e.document = workspace.Original
-	e.root = filepath.Dir(workspace.Original)
-	if err := e.loadDefinitions(workspace.Original); err != nil {
+	if err := e.loadFileDeclarations(e.filePath); err != nil {
 		return err
 	}
 
-	stopSignals := store.SetupRestoreSignals(workspace, e.stderr)
-	defer stopSignals()
 	defer func() {
 		if resultPath, err := e.outputs.writeResultDocument(e.filePath); err == nil {
 			writeATMEvent(e.stderr, "result", "%s", resultPath)
@@ -153,18 +198,8 @@ func (e *Engine) Run(ctx context.Context) (runErr error) {
 		if reportErr := e.report(); runErr == nil {
 			runErr = reportErr
 		}
-		if err := workspace.Restore(); runErr == nil {
-			runErr = err
-		}
 	}()
 
-	initialBlocks, err := store.ReadBlocks(e.filePath)
-	if err != nil {
-		return err
-	}
-	if e.snapshot {
-		e.blockLimit = len(initialBlocks)
-	}
 	for {
 		blocks, err := store.ReadBlocks(e.filePath)
 		if err != nil {
@@ -176,15 +211,12 @@ func (e *Engine) Run(ctx context.Context) (runErr error) {
 			}
 			return err
 		}
-		if e.blockLimit > 0 && len(blocks) > e.blockLimit {
-			blocks = blocks[:e.blockLimit]
-		}
 		index, globals, err := e.firstRunnableBlock(ctx, blocks)
 		if err != nil {
 			if errors.Is(err, store.ErrObsolete) {
 				continue
 			}
-			return fmt.Errorf("parse todo file %q: %w", e.filePath, err)
+			return fmt.Errorf("parse ATM file %q: %w", e.filePath, err)
 		}
 		if index == -1 {
 			if e.async.hasPending() {
@@ -194,12 +226,12 @@ func (e *Engine) Run(ctx context.Context) (runErr error) {
 		}
 
 		blockContext := e.blockExecutionContext(blocks, index)
-		task, err := compiler.ParseTaskForFile(e.filePath, index, blocks[index].Body, globals, compiler.CompileOptions{Root: e.root, Context: blockContext})
+		task, err := compiler.ParseTaskForFile(e.filePath, index, blocks[index].Body, globals, compiler.CompileOptions{Root: e.root, Context: blockContext, NamedContexts: blocks[index].NamedContexts, ContextRefsResolved: true})
 		if err != nil {
 			return err
 		}
 		task.SourcePromptHash = marker.SourcePromptHash(blocks[index].Body, blocks[index].Context)
-		task.SourcePath = workspace.Original
+		task.SourcePath = e.document
 		task.Scope = slices.Clone(blocks[index].Scope)
 		task.Line = blocks[index].StartLine
 		if task.Return != nil {
@@ -213,13 +245,13 @@ func (e *Engine) Run(ctx context.Context) (runErr error) {
 				if elseInfo.HeaderOnly {
 					elseTask = compiler.EmptyTask(index+1, globals)
 				} else {
-					elseTask, err = compiler.ParseTaskForFile(e.filePath, index+1, blocks[index+1].Body, globals, compiler.CompileOptions{Root: e.root, Context: blocks[index+1].Context})
+					elseTask, err = compiler.ParseTaskForFile(e.filePath, index+1, blocks[index+1].Body, globals, compiler.CompileOptions{Root: e.root, Context: blocks[index+1].Context, NamedContexts: blocks[index+1].NamedContexts, ContextRefsResolved: true})
 					if err != nil {
 						return err
 					}
 					elseTask.SourcePromptHash = marker.SourcePromptHash(blocks[index+1].Body, blocks[index+1].Context)
 				}
-				elseTask.SourcePath = workspace.Original
+				elseTask.SourcePath = e.document
 				elseTask.Scope = slices.Clone(blocks[index+1].Scope)
 				elseTask.Line = blocks[index+1].StartLine
 				task, err = compiler.AttachElseTask(task, elseTask)
@@ -240,6 +272,11 @@ func (e *Engine) Run(ctx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("task %d: %w", task.BlockIndex+1, err)
 		}
+		webhookMCPs, err := e.taskWebhookMCPs(task)
+		if err != nil {
+			return fmt.Errorf("task %d: %w", task.BlockIndex+1, err)
+		}
+		mcps = append(mcps, webhookMCPs...)
 		defMCP, err := e.taskDefMCP(task, dbs, skills, mcps)
 		if err != nil {
 			return fmt.Errorf("task %d: %w", task.BlockIndex+1, err)
@@ -269,6 +306,23 @@ func (e *Engine) loadDefinitions(sourcePath string) error {
 	return nil
 }
 
+func (e *Engine) loadFileDeclarations(sourcePath string) error {
+	data, err := os.ReadFile(e.filePath)
+	if err != nil {
+		return err
+	}
+	webhooks, err := compiler.ParseWebhookDecls(sourcePath, string(data))
+	if err != nil {
+		return err
+	}
+	for _, webhook := range webhooks {
+		if err := e.registerWebhookDecl(webhook); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *Engine) loadGlobalDeclarations() error {
 	data, err := os.ReadFile(e.filePath)
 	if err != nil {
@@ -278,6 +332,11 @@ func (e *Engine) loadGlobalDeclarations() error {
 	for i, block := range blocks {
 		body := block.Body
 		if marker.IsDone(body) || strings.TrimSpace(body) == "" {
+			continue
+		}
+		if _, ok, err := compiler.ParseGlobalFlagBlock(body); err != nil {
+			return fmt.Errorf("task %d: %w", i+1, err)
+		} else if ok {
 			continue
 		}
 		if pools, ok, err := compiler.ParseGlobalPoolBlock(body); err != nil {
@@ -330,6 +389,20 @@ func (e *Engine) loadGlobalDeclarations() error {
 			}
 			continue
 		}
+		if webhooks, ok, err := compiler.ParseGlobalWebhookBlock(body); err != nil {
+			return fmt.Errorf("task %d: %w", i+1, err)
+		} else if ok {
+			for _, webhook := range webhooks {
+				webhook.BlockIndex = i
+				webhook.SourcePath = e.document
+				webhook.Scope = slices.Clone(block.Scope)
+				webhook.Line = block.StartLine
+				if err := e.registerWebhookDecl(webhook); err != nil {
+					return fmt.Errorf("task %d: %w", i+1, err)
+				}
+			}
+			continue
+		}
 	}
 	return nil
 }
@@ -376,6 +449,17 @@ func (e *Engine) registerMCPDecl(mcp compiler.MCPDecl) error {
 		}
 	}
 	e.mcpItems = append(e.mcpItems, mcp)
+	return nil
+}
+
+func (e *Engine) registerWebhookDecl(webhook compiler.WebhookDecl) error {
+	if existing, exists := e.webhooks[webhook.Name]; exists && existing.BlockIndex != webhook.BlockIndex {
+		if existing.Line == webhook.Line || existing.BlockIndex < 0 {
+			return nil
+		}
+		return fmt.Errorf("duplicate webhook %q", webhook.Name)
+	}
+	e.webhooks[webhook.Name] = webhook
 	return nil
 }
 
@@ -476,6 +560,11 @@ func (e *Engine) firstRunnableBlock(ctx context.Context, blocks []compiler.Block
 		} else if ok {
 			continue
 		}
+		if _, ok, err := compiler.ParseGlobalFlagBlock(body); err != nil {
+			return -1, nil, fmt.Errorf("task %d: %w", i+1, err)
+		} else if ok {
+			continue
+		}
 		key := inFlightKey{index: i, hash: store.HashBody(body)}
 		if e.async.hasPendingKey(key) {
 			continue
@@ -547,13 +636,28 @@ func (e *Engine) firstRunnableBlock(ctx context.Context, blocks []compiler.Block
 			}
 			continue
 		}
+		if webhooks, ok, err := compiler.ParseGlobalWebhookBlock(body); err != nil {
+			return -1, nil, fmt.Errorf("task %d: %w", i+1, err)
+		} else if ok {
+			for _, webhook := range webhooks {
+				webhook.BlockIndex = i
+				webhook.SourcePath = e.document
+				webhook.Scope = slices.Clone(blocks[i].Scope)
+				webhook.Line = blocks[i].StartLine
+				if err := e.registerWebhookDecl(webhook); err != nil {
+					return -1, nil, fmt.Errorf("task %d: %w", i+1, err)
+				}
+			}
+			continue
+		}
 		globals := visibleRuntimeLetVars(lets, blocks[i])
 		globals = inheritRuntimeParentTaskVars(globals, parentVars, blocks[i])
+		globals = compiler.MergeVars(globals, e.vars)
 		if err := e.declareVisiblePools(blocks[i], pools); err != nil {
 			return -1, nil, fmt.Errorf("task %d: %w", i+1, err)
 		}
 		if e.hasPendingChildTask(blocks, i) {
-			task, err := compiler.ParseTaskForFile(e.filePath, i, body, globals, compiler.CompileOptions{Root: e.root, Context: blocks[i].Context})
+			task, err := compiler.ParseTaskForFile(e.filePath, i, body, globals, compiler.CompileOptions{Root: e.root, Context: blocks[i].Context, NamedContexts: blocks[i].NamedContexts, ContextRefsResolved: true})
 			if err != nil {
 				return -1, nil, err
 			}
@@ -687,7 +791,7 @@ func (e *Engine) handleConditionalBlock(ctx context.Context, blocks []compiler.B
 			return index, true, nil
 		}
 		if index > 0 && marker.IsDone(blocks[index-1].Body) {
-			previous, err := compiler.ParseTaskForFile(e.filePath, index-1, blocks[index-1].Body, globals, compiler.CompileOptions{Root: e.root, Context: blocks[index-1].Context})
+			previous, err := compiler.ParseTaskForFile(e.filePath, index-1, blocks[index-1].Body, globals, compiler.CompileOptions{Root: e.root, Context: blocks[index-1].Context, NamedContexts: blocks[index-1].NamedContexts, ContextRefsResolved: true})
 			if err == nil && compiler.TaskHasFlowIf(previous) {
 				if err := e.markControlDone(index, body); err != nil {
 					return -1, true, err
@@ -868,10 +972,11 @@ func (e *Engine) skipRange(blocks []compiler.Block, start, end int, reason strin
 func (e *Engine) markSkipped(index int, block compiler.Block, reason string) error {
 	body := block.Body
 	lease := store.NewBlockLease(index, body)
-	id, _, report, err := store.LeaseReportIdentity(e.filePath, lease)
+	id, _, _, err := store.LeaseReportIdentity(e.filePath, lease)
 	if err != nil {
 		return err
 	}
+	report := e.taskReportPath(index, id)
 	source := marker.SourcePromptHash(block.Body, block.Context)
 	now := time.Now()
 	info := compiler.SkippedInfo{Time: now, Reason: reason, ID: id, Source: source, Report: report}
@@ -892,10 +997,11 @@ func (e *Engine) markSkipped(index int, block compiler.Block, reason string) err
 func (e *Engine) markControlDone(index int, body string) error {
 	lease := store.NewBlockLease(index, body)
 	now := time.Now()
-	id, source, report, err := store.LeaseReportIdentity(e.filePath, lease)
+	id, source, _, err := store.LeaseReportIdentity(e.filePath, lease)
 	if err != nil {
 		return err
 	}
+	report := e.taskReportPath(index, id)
 	info := compiler.DoneInfo{Start: now, End: now, Runs: 0, ID: id, Source: source, Report: report}
 	if err := store.MarkDone(e.filePath, lease, info); err != nil {
 		return err

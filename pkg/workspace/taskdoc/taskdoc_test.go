@@ -3,8 +3,11 @@ package taskdoc
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/chinaykc/atm/pkg/lang/compiler"
 )
 
 func TestFormatContentFormatsAllTaskBlocks(t *testing.T) {
@@ -35,6 +38,45 @@ func TestFormatContentFormatsAllTaskBlocks(t *testing.T) {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("formatted content missing %q:\n%s", want, updated)
 		}
+	}
+}
+
+func TestFormatContentNormalizesComposedHeadersWithoutChangingTaskIR(t *testing.T) {
+	input := "/task branch /fork base /bash echo setup /for 2 /go workers\nReview the change.\n"
+	before, err := compiler.ParseTask(0, input, nil, compiler.CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	formatted, count := FormatContent(input)
+	if count != 1 {
+		t.Fatalf("block count = %d, want 1", count)
+	}
+	want := "/task branch\n/fork base\n/bash echo setup\n/for 2\n/go workers\nReview the change.\n"
+	if formatted != want {
+		t.Fatalf("formatted content = %q, want %q", formatted, want)
+	}
+	if again, _ := FormatContent(formatted); again != formatted {
+		t.Fatalf("format is not idempotent:\n%s", again)
+	}
+
+	after, err := compiler.ParseTask(0, formatted, nil, compiler.CompileOptions{Root: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("formatted task IR changed\nbefore: %#v\nafter:  %#v", before, after)
+	}
+}
+
+func TestFormatContentPreservesNestedProvidersAndFencedPayloads(t *testing.T) {
+	input := "/let value /bash echo \"/task\"\n/output result\n```schema\nreason:string:why\n```\nReport.\n"
+	formatted, _ := FormatContent(input)
+	if !strings.Contains(formatted, `/let value /bash echo "/task"`) {
+		t.Fatalf("nested provider was split: %q", formatted)
+	}
+	if !strings.Contains(formatted, "/output result\n```schema\nreason:string:why\n```\n") {
+		t.Fatalf("fenced payload was rewritten: %q", formatted)
 	}
 }
 

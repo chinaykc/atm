@@ -8,6 +8,7 @@ import (
 
 type commandLineDefaults struct {
 	Options      RunOptions
+	TaskName     string
 	goRun        bool
 	wait         bool
 	flow         []astOp
@@ -17,6 +18,11 @@ type commandLineDefaults struct {
 	bashCommands []BashCommand
 	prefixVar    string
 	output       *OutputSpec
+	db           DBTaskConfig
+	skill        SkillTaskConfig
+	mcp          MCPTaskConfig
+	webhook      WebhookTaskConfig
+	contextRefs  []string
 }
 
 func parseCommandLine(line string, vars map[string]any, root string) ([]forAST, commandLineDefaults, error) {
@@ -40,14 +46,37 @@ func parseCommandSequence(line string, vars map[string]any, root string) ([]comm
 		}
 		switch token {
 		case "/task":
-			if len(fields) != 1 {
-				return nil, fmt.Errorf("/task must be the only command on its line")
+			taskName := ""
+			next := i + 1
+			if next < len(fields) && !isCommandToken(fields[next]) {
+				if !isVariableName(fields[next]) {
+					return nil, fmt.Errorf("invalid task name %q", fields[next])
+				}
+				taskName = fields[next]
+				next++
 			}
-			commands = append(commands, command{Kind: commandTask})
-			i++
+			commands = append(commands, command{Kind: commandTask, TaskName: taskName})
+			i = next
 		case "/resume":
-			commands = append(commands, command{Kind: commandResume})
-			i++
+			if i+1 >= len(fields) || isCommandToken(fields[i+1]) {
+				return nil, fmt.Errorf("/resume requires a task name")
+			}
+			target := fields[i+1]
+			if !isVariableName(target) {
+				return nil, fmt.Errorf("invalid resume task name %q", target)
+			}
+			commands = append(commands, command{Kind: commandResume, ResumeTarget: target})
+			i += 2
+		case "/fork":
+			if i+1 >= len(fields) || isCommandToken(fields[i+1]) {
+				return nil, fmt.Errorf("/fork requires a task name")
+			}
+			target := fields[i+1]
+			if !isVariableName(target) {
+				return nil, fmt.Errorf("invalid fork task name %q", target)
+			}
+			commands = append(commands, command{Kind: commandFork, ForkTarget: target})
+			i += 2
 		case "/go":
 			pool, next, err := parseOptionalPoolName(fields, i+1)
 			if err != nil {
@@ -77,44 +106,50 @@ func parseCommandSequence(line string, vars map[string]any, root string) ([]comm
 			commands = append(commands, command{Kind: commandCd, Cd: cd})
 			i = next
 		case "/let":
-			if i != 0 {
-				return nil, fmt.Errorf("/let must be the only command on its line")
-			}
-			if len(fields) < 3 {
+			if i+1 >= len(fields) || isCommandToken(fields[i+1]) {
 				return nil, fmt.Errorf("/let requires a name and value")
 			}
-			name := fields[1]
+			name := fields[i+1]
 			if !isVariableName(name) {
 				return nil, fmt.Errorf("invalid variable name %q", name)
 			}
-			value := strings.TrimSpace(strings.TrimPrefix(line, "/let "+name))
-			if value == "/call" || strings.HasPrefix(value, "/call ") {
-				call, err := ParseCallExpression(value)
+			valueStart := i + 2
+			if valueStart >= len(fields) {
+				return nil, fmt.Errorf("/let %s requires a value", name)
+			}
+			if fields[valueStart] == "/call" {
+				call, next, err := parseCallFields(fields, valueStart)
 				if err != nil {
 					return nil, err
 				}
 				call.Assign = name
 				commands = append(commands, command{Kind: commandCall, Call: call})
-			} else if value == "/bash" || strings.HasPrefix(value, "/bash ") {
-				script := strings.TrimSpace(strings.TrimPrefix(value, "/bash"))
+				i = next
+			} else if fields[valueStart] == "/bash" {
+				args, next := collectCommandArgs(fields, valueStart+1)
+				script := strings.Join(args, " ")
 				if script == "" {
 					return nil, fmt.Errorf("/let %s /bash requires a script", name)
 				}
 				commands = append(commands, command{Kind: commandBash, Bash: BashCommand{Name: name, Script: script}})
+				i = next
 			} else {
+				args, next := collectCommandArgs(fields, valueStart)
+				if len(args) == 0 {
+					return nil, fmt.Errorf("/let %s requires a value", name)
+				}
+				value := strings.Join(args, " ")
 				commands = append(commands, command{Kind: commandLet, LetName: name, LetValue: value})
+				i = next
 			}
-			return commands, nil
 		case "/bash":
-			if i != 0 {
-				return nil, fmt.Errorf("/bash must be the only command on its line")
-			}
-			script := strings.TrimSpace(strings.TrimPrefix(line, "/bash"))
+			args, next := collectCommandArgs(fields, i+1)
+			script := strings.Join(args, " ")
 			if script == "" {
 				return nil, fmt.Errorf("/bash requires a script")
 			}
 			commands = append(commands, command{Kind: commandBash, Bash: BashCommand{Script: script}})
-			return commands, nil
+			i = next
 		case "/if":
 			condition, next, err := parseIfCommandFields(fields, i)
 			if err != nil {
@@ -126,7 +161,12 @@ func parseCommandSequence(line string, vars map[string]any, root string) ([]comm
 			commands = append(commands, command{Kind: commandElse})
 			i++
 		case "/output":
-			return nil, fmt.Errorf("/output must be the only command on its line and followed by a fenced schema block")
+			output, next, err := parseOutputFields(fields, i)
+			if err != nil {
+				return nil, err
+			}
+			commands = append(commands, command{Kind: commandOutput, Output: output})
+			i = next
 		case "/pool":
 			return nil, fmt.Errorf("/pool must be written as a standalone global block")
 		case "/def":
@@ -134,24 +174,64 @@ func parseCommandSequence(line string, vars map[string]any, root string) ([]comm
 		case "/import":
 			return nil, fmt.Errorf("/import must be written as a standalone global block")
 		case "/context":
-			return nil, fmt.Errorf("/context requires a known Markdown heading reference")
+			args, next := collectCommandArgs(fields, i+1)
+			if len(args) == 0 {
+				return nil, fmt.Errorf("/context requires a Markdown heading reference")
+			}
+			ref := strings.TrimLeft(strings.TrimSpace(strings.Join(args, " ")), "# \t")
+			if ref == "" {
+				return nil, fmt.Errorf("/context requires a Markdown heading reference")
+			}
+			commands = append(commands, command{Kind: commandContext, ContextRefs: []string{ref}})
+			i = next
 		case "/doc":
 			return nil, fmt.Errorf("/doc requires inline text or a fenced block in a Markdown section before task commands")
 		case "/db":
-			return nil, fmt.Errorf("/db must be written as a standalone line")
+			config, next, err := parseDBTaskFields(fields, i)
+			if err != nil {
+				return nil, err
+			}
+			commands = append(commands, command{Kind: commandDB, DB: config})
+			i = next
 		case "/skill":
-			return nil, fmt.Errorf("/skill must be written as a standalone line")
+			config, next, err := parseSkillTaskFields(fields, i)
+			if err != nil {
+				return nil, err
+			}
+			commands = append(commands, command{Kind: commandSkill, Skill: config})
+			i = next
 		case "/mcp":
-			return nil, fmt.Errorf("/mcp must be written as a standalone line")
+			config, next, err := parseMCPTaskFields(fields, i)
+			if err != nil {
+				return nil, err
+			}
+			commands = append(commands, command{Kind: commandMCP, MCP: config})
+			i = next
 		case "/return":
 			return nil, fmt.Errorf("/return must be written as a standalone line")
 		case "/call":
-			call, err := parseCallFields(fields, i)
+			call, next, err := parseCallFields(fields, i)
 			if err != nil {
 				return nil, err
 			}
 			commands = append(commands, command{Kind: commandCall, Call: call})
-			i = len(fields)
+			i = next
+		case "/webhook":
+			if i+1 < len(fields) && fields[i+1] == "use" {
+				config, next, err := parseWebhookTaskFields(fields, i)
+				if err != nil {
+					return nil, err
+				}
+				commands = append(commands, command{Kind: commandWebhookUse, WebhookUse: config})
+				i = next
+				continue
+			}
+			call, next, err := parseWebhookCallFields(fields, i)
+			if err != nil {
+				return nil, err
+			}
+			commands = append(commands, command{Kind: commandWebhook, Webhook: call})
+			i = next
 		case "/for":
 			step, next, err := parseForCommand(fields, i+1, root)
 			if err != nil {
@@ -176,11 +256,8 @@ func parseCommandSequence(line string, vars map[string]any, root string) ([]comm
 			if _, ok := vars[name]; !ok {
 				return nil, fmt.Errorf("unsupported command %q", token)
 			}
-			if len(fields) != 1 {
-				return nil, fmt.Errorf("variable command %q must be the only command on its line", token)
-			}
 			commands = append(commands, command{Kind: commandPrefixVar, PrefixVar: name})
-			return commands, nil
+			i++
 		}
 	}
 	return commands, nil
@@ -194,9 +271,18 @@ func lowerCommandSequence(commands []command) ([]forAST, commandLineDefaults, er
 	for _, command := range commands {
 		switch command.Kind {
 		case commandTask:
-			// Explicit task start; no runtime option.
+			if command.TaskName != "" {
+				if defaults.TaskName != "" && defaults.TaskName != command.TaskName {
+					return nil, commandLineDefaults{}, fmt.Errorf("conflicting task names %q and %q", defaults.TaskName, command.TaskName)
+				}
+				defaults.TaskName = command.TaskName
+			}
 		case commandResume:
 			defaults.Options.Resume = true
+			defaults.Options.ResumeTarget = command.ResumeTarget
+		case commandFork:
+			defaults.Options.Fork = true
+			defaults.Options.ForkTarget = command.ForkTarget
 		case commandArgs:
 			defaults.Options.Args = append(defaults.Options.Args, command.Options.Args...)
 		case commandCd:
@@ -210,6 +296,31 @@ func lowerCommandSequence(commands []command) ([]forAST, commandLineDefaults, er
 			defaults.flow = append(defaults.flow, astOp{kind: astOpBash, BashCommand: command.Bash})
 		case commandCall:
 			defaults.flow = append(defaults.flow, astOp{kind: astOpCall, Call: command.Call})
+		case commandWebhook:
+			defaults.flow = append(defaults.flow, astOp{kind: astOpWebhook, Webhook: command.Webhook})
+		case commandWebhookUse:
+			defaults.webhook.Use = append(defaults.webhook.Use, command.WebhookUse.Use...)
+		case commandOutput:
+			if defaults.output != nil && command.Output != nil {
+				return nil, commandLineDefaults{}, fmt.Errorf("/output can only appear once")
+			}
+			defaults.output = command.Output
+		case commandDB:
+			defaults.db.IgnoreAll = defaults.db.IgnoreAll || command.DB.IgnoreAll
+			defaults.db.Ignore = append(defaults.db.Ignore, command.DB.Ignore...)
+			defaults.db.Use = append(defaults.db.Use, command.DB.Use...)
+			defaults.db.Access = append(defaults.db.Access, command.DB.Access...)
+		case commandSkill:
+			defaults.skill.IgnoreAll = defaults.skill.IgnoreAll || command.Skill.IgnoreAll
+			defaults.skill.Use = append(defaults.skill.Use, command.Skill.Use...)
+			defaults.skill.Ignore = append(defaults.skill.Ignore, command.Skill.Ignore...)
+		case commandMCP:
+			defaults.mcp.IgnoreAll = defaults.mcp.IgnoreAll || command.MCP.IgnoreAll
+			defaults.mcp.Use = append(defaults.mcp.Use, command.MCP.Use...)
+			defaults.mcp.Ignore = append(defaults.mcp.Ignore, command.MCP.Ignore...)
+			defaults.mcp.DefUse = append(defaults.mcp.DefUse, command.MCP.DefUse...)
+		case commandContext:
+			defaults.contextRefs = append(defaults.contextRefs, command.ContextRefs...)
 		case commandFor:
 			steps = append(steps, command.For)
 			defaults.flow = append(defaults.flow, astOp{kind: astOpFor, step: command.For})
@@ -275,18 +386,34 @@ func parseCdCommand(fields []string, start int) (CdCommand, int, error) {
 	return CdCommand{Path: args[0], MustExist: mustExist}, end, nil
 }
 
-func parseCallFields(fields []string, start int) (Call, error) {
+func parseOutputFields(fields []string, start int) (*OutputSpec, int, error) {
+	if start >= len(fields) || fields[start] != "/output" {
+		return nil, start, fmt.Errorf("expected /output")
+	}
+	args, next := collectCommandArgs(fields, start+1)
+	if len(args) > 1 {
+		return nil, next, fmt.Errorf("/output accepts at most one file name")
+	}
+	fileName := ""
+	if len(args) == 1 {
+		fileName = args[0]
+	}
+	return &OutputSpec{FileName: fileName}, next, nil
+}
+
+func parseCallFields(fields []string, start int) (Call, int, error) {
 	if start >= len(fields) || fields[start] != "/call" {
-		return Call{}, fmt.Errorf("expected /call")
+		return Call{}, start, fmt.Errorf("expected /call")
 	}
 	if start+1 >= len(fields) {
-		return Call{}, fmt.Errorf("/call requires a definition name")
+		return Call{}, start, fmt.Errorf("/call requires a definition name")
 	}
 	name := fields[start+1]
 	if !isDefinitionName(name) {
-		return Call{}, fmt.Errorf("invalid definition name %q", name)
+		return Call{}, start, fmt.Errorf("invalid definition name %q", name)
 	}
-	return Call{Name: name, Args: unquoteCommandValues(slices.Clone(fields[start+2:]))}, nil
+	args, next := collectCommandArgs(fields, start+2)
+	return Call{Name: name, Args: slices.Clone(args)}, next, nil
 }
 
 func ParseCallExpression(text string) (Call, error) {
@@ -294,7 +421,14 @@ func ParseCallExpression(text string) (Call, error) {
 	if err != nil {
 		return Call{}, err
 	}
-	return parseCallFields(fields, 0)
+	call, next, err := parseCallFields(fields, 0)
+	if err != nil {
+		return Call{}, err
+	}
+	if next != len(fields) {
+		return Call{}, fmt.Errorf("unexpected command argument %q", fields[next])
+	}
+	return call, nil
 }
 
 func collectCommandArgs(fields []string, start int) ([]string, int) {
@@ -303,15 +437,6 @@ func collectCommandArgs(fields []string, start int) ([]string, int) {
 		end++
 	}
 	return unquoteCommandValues(fields[start:end]), end
-}
-
-func isCommandToken(token string) bool {
-	switch token {
-	case "/task", "/resume", "/go", "/wait", "/args", "/cd", "/let", "/bash", "/for", "/if", "/else", "/output", "/pool", "/call", "/return", "/def", "/import", "/context", "/doc", "/db", "/skill", "/mcp":
-		return true
-	default:
-		return false
-	}
 }
 
 func hasNamedBashCommand(commands []BashCommand, name string) bool {

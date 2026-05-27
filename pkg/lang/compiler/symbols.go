@@ -16,6 +16,8 @@ type SymbolTable struct {
 	SkillItems      []SkillDecl
 	MCPs            map[string]MCPDecl
 	MCPItems        []MCPDecl
+	Webhooks        map[string]WebhookDecl
+	WebhookItems    []WebhookDecl
 }
 
 func BuildSymbolTable(plan Plan) (SymbolTable, error) {
@@ -25,6 +27,7 @@ func BuildSymbolTable(plan Plan) (SymbolTable, error) {
 		DBs:         make(map[string]DBDecl, len(plan.DBs)),
 		Skills:      make(map[string]SkillDecl, len(plan.Skills)),
 		MCPs:        make(map[string]MCPDecl, len(plan.MCPs)),
+		Webhooks:    make(map[string]WebhookDecl, len(plan.Webhooks)),
 	}
 	for _, def := range plan.Definitions {
 		symbols.Definitions[def.Name] = def
@@ -63,6 +66,13 @@ func BuildSymbolTable(plan Plan) (SymbolTable, error) {
 		}
 		symbols.MCPs[mcp.Name] = mcp
 		symbols.MCPItems = append(symbols.MCPItems, mcp)
+	}
+	for _, webhook := range plan.Webhooks {
+		if existing, ok := symbols.Webhooks[webhook.Name]; ok {
+			return symbols, fmt.Errorf("webhook %q already declared at block %d", webhook.Name, existing.BlockIndex+1)
+		}
+		symbols.Webhooks[webhook.Name] = webhook
+		symbols.WebhookItems = append(symbols.WebhookItems, webhook)
 	}
 	return symbols, nil
 }

@@ -66,6 +66,7 @@ type CommandKind string
 const (
 	CommandTask   CommandKind = "task"
 	CommandResume CommandKind = "resume"
+	CommandFork   CommandKind = "fork"
 	CommandArgs   CommandKind = "args"
 	CommandCd     CommandKind = "cd"
 	CommandLet    CommandKind = "let"

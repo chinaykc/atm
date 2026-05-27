@@ -202,7 +202,18 @@ func formatForUntilFlow(condition ir.Condition) string {
 func appendRunOptionFlow(base string, options ir.RunOptions) string {
 	var parts []string
 	if options.Resume {
-		parts = append(parts, "resume")
+		if options.ResumeTarget != "" {
+			parts = append(parts, "resume="+options.ResumeTarget)
+		} else {
+			parts = append(parts, "resume")
+		}
+	}
+	if options.Fork {
+		if options.ForkTarget != "" {
+			parts = append(parts, "fork="+options.ForkTarget)
+		} else {
+			parts = append(parts, "fork")
+		}
 	}
 	if len(options.Args) > 0 {
 		parts = append(parts, "args="+strings.Join(options.Args, " "))

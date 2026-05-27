@@ -6,14 +6,16 @@ import (
 )
 
 type Block struct {
-	Prefix      string
-	Body        string
-	Sep         string
-	Context     string
-	Scope       []string
-	StartLine   int
-	HasParent   bool
-	ParentIndex int
+	Prefix        string
+	Body          string
+	Sep           string
+	Context       string
+	LocalContext  string
+	NamedContexts map[string]string
+	Scope         []string
+	StartLine     int
+	HasParent     bool
+	ParentIndex   int
 }
 
 type Plan = ir.Plan
@@ -35,6 +37,7 @@ const (
 	FlowGo      = ir.FlowGo
 	FlowWait    = ir.FlowWait
 	FlowCall    = ir.FlowCall
+	FlowWebhook = ir.FlowWebhook
 	FlowReturn  = ir.FlowReturn
 	FlowExecute = ir.FlowExecute
 
@@ -45,6 +48,7 @@ const (
 	FlatOpGo      = ir.FlatOpGo
 	FlatOpWait    = ir.FlatOpWait
 	FlatOpCall    = ir.FlatOpCall
+	FlatOpWebhook = ir.FlatOpWebhook
 	FlatOpReturn  = ir.FlatOpReturn
 	FlatOpExecute = ir.FlatOpExecute
 )
@@ -63,6 +67,10 @@ type Call = ir.Call
 type ReturnKind = ir.ReturnKind
 type ReturnSpec = ir.ReturnSpec
 type OutputMessage = ir.OutputMessage
+type FlagDecl = ir.FlagDecl
+type WebhookDecl = ir.WebhookDecl
+type WebhookCall = ir.WebhookCall
+type WebhookTaskConfig = ir.WebhookTaskConfig
 type LetBinding = ir.LetBinding
 type PoolDecl = ir.PoolDecl
 type Definition = ir.Definition

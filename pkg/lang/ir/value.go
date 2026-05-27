@@ -47,16 +47,32 @@ func MergeRunOptions(base, override RunOptions) RunOptions {
 	if override.Workdir != "" {
 		workdir = override.Workdir
 	}
+	resumeTarget := base.ResumeTarget
+	if override.ResumeTarget != "" {
+		resumeTarget = override.ResumeTarget
+	}
+	resumeSessionID := base.ResumeSessionID
+	if override.ResumeSessionID != "" {
+		resumeSessionID = override.ResumeSessionID
+	}
+	forkTarget := base.ForkTarget
+	if override.ForkTarget != "" {
+		forkTarget = override.ForkTarget
+	}
 	return RunOptions{
-		Resume:   base.Resume || override.Resume,
-		Args:     slices.Concat(base.Args, override.Args),
-		Output:   output,
-		DBs:      slices.Concat(base.DBs, override.DBs),
-		Workdir:  workdir,
-		Skills:   slices.Concat(base.Skills, override.Skills),
-		MCPs:     slices.Concat(base.MCPs, override.MCPs),
-		DefMCP:   cloneMergedDefMCPRuntime(base.DefMCP, override.DefMCP),
-		DefDepth: max(base.DefDepth, override.DefDepth),
+		Resume:          base.Resume || override.Resume,
+		ResumeTarget:    resumeTarget,
+		ResumeSessionID: resumeSessionID,
+		Fork:            base.Fork || override.Fork,
+		ForkTarget:      forkTarget,
+		Args:            slices.Concat(base.Args, override.Args),
+		Output:          output,
+		DBs:             slices.Concat(base.DBs, override.DBs),
+		Workdir:         workdir,
+		Skills:          slices.Concat(base.Skills, override.Skills),
+		MCPs:            slices.Concat(base.MCPs, override.MCPs),
+		DefMCP:          cloneMergedDefMCPRuntime(base.DefMCP, override.DefMCP),
+		DefDepth:        max(base.DefDepth, override.DefDepth),
 	}
 }
 

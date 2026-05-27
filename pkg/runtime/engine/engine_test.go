@@ -31,6 +31,12 @@ func (r *fakeRunner) Name() string {
 
 func (r *fakeRunner) Execute(ctx context.Context, todoPath, prompt string, opts compiler.RunOptions, stdout, stderr io.Writer) (agent.ExecuteResult, error) {
 	r.mu.Lock()
+	if opts.Resume {
+		r.events = append(r.events, "resume:"+opts.ResumeSessionID)
+	}
+	if opts.Fork {
+		r.events = append(r.events, "fork:"+opts.ResumeSessionID)
+	}
 	r.events = append(r.events, "start:"+strings.TrimSpace(prompt))
 	r.mu.Unlock()
 	if strings.Contains(prompt, "slow") || strings.Contains(prompt, "parallel") {
@@ -42,12 +48,16 @@ func (r *fakeRunner) Execute(ctx context.Context, todoPath, prompt string, opts 
 	return agent.ExecuteResult{
 		Messages:  []compiler.OutputMessage{{Tool: "fake", Role: "assistant", Text: "done " + strings.TrimSpace(prompt)}},
 		RawEvents: `{"type":"item.completed","item":{"type":"agent_message","text":"done"}}` + "\n",
+		SessionID: "session-" + strings.ReplaceAll(strings.TrimSpace(prompt), " ", "-"),
 	}, nil
 }
 
 func (r *fakeRunner) Check(ctx context.Context, todoPath, prompt, condition string, opts compiler.RunOptions, stdout, stderr io.Writer) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if opts.Resume {
+		r.events = append(r.events, "check-resume:"+opts.ResumeSessionID)
+	}
 	r.checks++
 	return r.checks >= 2, nil
 }
@@ -623,6 +633,20 @@ func TestDefsMCPServerCallsDefinition(t *testing.T) {
 	}
 	if !strings.Contains(text.Text, `"returned":true`) || !strings.Contains(text.Text, `done Check api.`) {
 		t.Fatalf("missing definition return in tool result:\n%s", text.Text)
+	}
+	_, err = clientSession.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name:      "atm_def_check",
+		Arguments: map[string]any{"area": "api", "extra": "ignored"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown argument "extra"`) {
+		t.Fatalf("expected unknown argument error, got %v", err)
+	}
+}
+
+func TestDefsMCPConfigRejectsUnknownFields(t *testing.T) {
+	_, err := parseDefsMCPConfig([]byte(`{"todo_path":"todo.md","definitions":[],"tool":"codex","depth":1,"definitionz":[]}`))
+	if err == nil || !strings.Contains(err.Error(), `unknown field "definitionz"`) {
+		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }
 
@@ -1454,7 +1478,7 @@ func TestOutputDirectoryReceivesEventsAndResultDocument(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outDir, "result.md")); err != nil {
 		t.Fatalf("expected result.md: %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(outDir, "task-001-run-001-fake.jsonl"))
+	matches, err := filepath.Glob(filepath.Join(outDir, "tasks", "*", "task-001-run-001-fake.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1468,7 +1492,7 @@ func TestOutputDirectoryReceivesEventsAndResultDocument(t *testing.T) {
 	if !strings.Contains(string(data), `"agent_message"`) {
 		t.Fatalf("unexpected event stream: %s", data)
 	}
-	reports, err := filepath.Glob(filepath.Join(dir, ".atm", "reports", "one-*.md"))
+	reports, err := filepath.Glob(filepath.Join(outDir, "tasks", "one-*", "report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1508,17 +1532,17 @@ func TestOutputDirectoryReceivesEventsAndResultDocument(t *testing.T) {
 		t.Fatalf("unexpected state header:\n%s", stateData)
 	}
 	for id, task := range state.Tasks {
-		if !strings.HasPrefix(id, "one-") || task.Status != "done" || task.Runs != 1 || task.Report != ".atm/reports/"+id+".md" {
+		if !strings.HasPrefix(id, "one-") || task.Status != "done" || task.Runs != 1 || task.Report != "artifacts/tasks/"+id+"/report.md" {
 			t.Fatalf("unexpected task state for %q: %#v\n%s", id, task, stateData)
 		}
 		if !strings.HasPrefix(task.SourcePromptHash, "sha256:") || !strings.HasPrefix(task.RenderedPromptHash, "sha256:") || !strings.HasPrefix(task.PlanHash, "sha256:") || task.StartedAt == "" || task.UpdatedAt == "" {
 			t.Fatalf("missing task state fields for %q: %#v\n%s", id, task, stateData)
 		}
-		if len(task.Logs) < 2 || !strings.HasPrefix(task.Logs[0], ".atm/logs/task-001-") || !strings.Contains(strings.Join(task.Logs, "\n"), "artifacts/task-001-run-001-fake.jsonl") {
+		if len(task.Logs) < 2 || !strings.HasPrefix(task.Logs[0], "artifacts/tasks/"+id+"/logs/task-001-") || !strings.Contains(strings.Join(task.Logs, "\n"), "artifacts/tasks/"+id+"/task-001-run-001-fake.jsonl") {
 			t.Fatalf("unexpected task logs for %q: %#v\n%s", id, task.Logs, stateData)
 		}
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(task.Logs[0]))); err != nil {
-			t.Fatalf("expected task log under .atm/logs: %v", err)
+			t.Fatalf("expected task log under task artifact directory: %v", err)
 		}
 	}
 }
@@ -1625,7 +1649,7 @@ func TestRunFailureWritesFailedReportAndState(t *testing.T) {
 	if !strings.Contains(string(content), "> status: failed") || !strings.Contains(string(content), "> error: task 1 run failed: simulated failure") {
 		t.Fatalf("expected failed report block:\n%s", content)
 	}
-	reports, err := filepath.Glob(filepath.Join(dir, ".atm", "reports", "fail-this-task-*.md"))
+	reports, err := filepath.Glob(filepath.Join(outDir, "tasks", "fail-this-task-*", "report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1681,7 +1705,7 @@ func TestRunWritesOrphanReportWhenTaskBlockDisappears(t *testing.T) {
 	if strings.Contains(string(content), "[!ATM]") {
 		t.Fatalf("did not expect main document report after task deletion:\n%s", content)
 	}
-	reports, err := filepath.Glob(filepath.Join(dir, ".atm", "reports", "orphan-me-*.md"))
+	reports, err := filepath.Glob(filepath.Join(dir, "out", "tasks", "orphan-me-*", "report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1740,7 +1764,14 @@ func TestOutputCommandConstrainsPromptAndWritesStructuredArtifact(t *testing.T) 
 	if strings.Contains(runner.prompt, `"reason"`) {
 		t.Fatalf("did not expect schema injected into prompt:\n%s", runner.prompt)
 	}
-	outputPath := filepath.Join(outDir, "summary.json")
+	matches, err := filepath.Glob(filepath.Join(outDir, "tasks", "*", "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected structured output file, got %v\nstderr:\n%s", matches, stderr.String())
+	}
+	outputPath := matches[0]
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatalf("expected structured output file: %v\nstderr:\n%s", err, stderr.String())
@@ -1765,7 +1796,14 @@ func TestOutputCommandWithoutSchemaWritesLatestMessage(t *testing.T) {
 	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: outDir}); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(outDir, "summary.txt"))
+	matches, err := filepath.Glob(filepath.Join(outDir, "tasks", "*", "summary.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected text output file, got %v", matches)
+	}
+	data, err := os.ReadFile(matches[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1786,9 +1824,12 @@ func TestOutputCommandInGoBranchAddsSuffixAndRendersAgentVars(t *testing.T) {
 	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: outDir}); err != nil {
 		t.Fatal(err)
 	}
-	outputPath := filepath.Join(outDir, "summary-1-agent-1.json")
-	if _, err := os.Stat(outputPath); err != nil {
-		t.Fatalf("expected branch-suffixed structured output file: %v", err)
+	matches, err := filepath.Glob(filepath.Join(outDir, "tasks", "*", "summary-1-agent-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected branch-suffixed structured output file, got %v", matches)
 	}
 }
 
@@ -2225,53 +2266,176 @@ func TestAppendDuringRunningTaskIsPickedUpByCurrentRun(t *testing.T) {
 	}
 }
 
-func TestSnapshotRunDoesNotPickUpAppendedTask(t *testing.T) {
+func TestResumeUsesRecordedNamedTaskSession(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "taskdoc.txt")
-	if err := os.WriteFile(file, []byte("/task\nslow first\n"), 0o644); err != nil {
+	body := strings.Join([]string{
+		"/task alpha",
+		"first task",
+		"",
+		"/resume alpha",
+		"follow up",
+		"",
+	}, "\n")
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out"), Snapshot: true})
-	}()
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
+	}
+	events := strings.Join(runner.snapshot(), "\n")
+	if !strings.Contains(events, "resume:session-first-task") {
+		t.Fatalf("expected resume to use recorded session id, got:\n%s", events)
+	}
+	stateData, err := os.ReadFile(filepath.Join(dir, ".atm", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stateData), `"alpha"`) || !strings.Contains(string(stateData), `"id": "session-first-task"`) {
+		t.Fatalf("expected named session in state:\n%s", stateData)
+	}
+}
 
-	waitForEvent(t, runner, "start:slow first")
-	active, err := store.ResolveActiveTodoPath(file)
+func TestForkUsesRecordedNamedTaskSessionAndRecordsNewTask(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	body := strings.Join([]string{
+		"/task alpha",
+		"first task",
+		"",
+		"/task branch /fork alpha",
+		"branch task",
+		"",
+	}, "\n")
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
+	}
+	events := strings.Join(runner.snapshot(), "\n")
+	if !strings.Contains(events, "fork:session-first-task") {
+		t.Fatalf("expected fork to use recorded session id, got:\n%s", events)
+	}
+	stateData, err := os.ReadFile(filepath.Join(dir, ".atm", "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.OpenFile(active, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(string(stateData), `"branch"`) || !strings.Contains(string(stateData), `"id": "session-branch-task"`) {
+		t.Fatalf("expected forked task session in state:\n%s", stateData)
 	}
-	if _, err := f.WriteString("\n/task\nsecond\n"); err != nil {
-		f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("snapshot run did not exit")
+func TestForkAllowsAnonymousCurrentTaskWithoutRecordingNewSession(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	body := strings.Join([]string{
+		"/task alpha",
+		"first task",
+		"",
+		"/fork alpha",
+		"anonymous branch",
+		"",
+	}, "\n")
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	got := strings.Join(runner.snapshot(), "\n")
-	if strings.Contains(got, "second") {
-		t.Fatalf("snapshot run should not execute appended task, got:\n%s", got)
+	runner := &fakeRunner{}
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
 	}
-	updated, err := os.ReadFile(file)
+	events := strings.Join(runner.snapshot(), "\n")
+	if !strings.Contains(events, "fork:session-first-task") {
+		t.Fatalf("expected anonymous fork to use recorded session id, got:\n%s", events)
+	}
+	stateData, err := os.ReadFile(filepath.Join(dir, ".atm", "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(updated), "second") {
-		t.Fatalf("expected appended task preserved in restored todo:\n%s", updated)
+	state := string(stateData)
+	if !strings.Contains(state, `"alpha"`) || !strings.Contains(state, `"id": "session-first-task"`) {
+		t.Fatalf("expected source named session in state:\n%s", stateData)
+	}
+	if strings.Contains(state, `"session-anonymous-branch"`) {
+		t.Fatalf("anonymous fork should not record a reusable named session:\n%s", stateData)
+	}
+}
+
+func TestForkAndTaskHeaderOrderVariantsRecordNewSession(t *testing.T) {
+	cases := []string{
+		"/fork alpha\n/task branch\nbranch task\n",
+		"/task branch\n/fork alpha\nbranch task\n",
+		"/fork alpha /task branch\nbranch task\n",
+		"/task branch /fork alpha\nbranch task\n",
+	}
+	for _, branch := range cases {
+		name := strings.ReplaceAll(strings.TrimSpace(strings.Split(branch, "\n")[0]), " ", "_")
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			file := filepath.Join(dir, "taskdoc.txt")
+			body := strings.Join([]string{
+				"/task alpha",
+				"first task",
+				"",
+				branch,
+			}, "\n")
+			if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runner := &fakeRunner{}
+			if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+				t.Fatal(err)
+			}
+			events := strings.Join(runner.snapshot(), "\n")
+			if !strings.Contains(events, "fork:session-first-task") {
+				t.Fatalf("expected fork to use recorded session id, got:\n%s", events)
+			}
+			stateData, err := os.ReadFile(filepath.Join(dir, ".atm", "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(stateData), `"branch"`) || !strings.Contains(string(stateData), `"id": "session-branch-task"`) {
+				t.Fatalf("expected branch session in state:\n%s", stateData)
+			}
+		})
+	}
+}
+
+func TestResumeLoopCheckUsesRecordedNamedTaskSession(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	body := strings.Join([]string{
+		"/task alpha",
+		"first task",
+		"",
+		"/resume alpha /for 2 until done",
+		"follow up",
+		"",
+	}, "\n")
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
+	}
+	events := strings.Join(runner.snapshot(), "\n")
+	if !strings.Contains(events, "check-resume:session-first-task") {
+		t.Fatalf("expected loop check to use recorded session id, got:\n%s", events)
+	}
+}
+
+func TestResumeWithoutRecordedNamedTaskFails(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	if err := os.WriteFile(file, []byte("/resume alpha\nfollow up\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Run(context.Background(), Options{FilePath: file, Runner: &fakeRunner{}, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")})
+	if err == nil || !strings.Contains(err.Error(), "no recorded agent session for /resume alpha") {
+		t.Fatalf("expected missing named session error, got %v", err)
 	}
 }
 

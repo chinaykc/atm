@@ -67,7 +67,7 @@ func (r *outputRegistry) track(path string) {
 	r.mu.Unlock()
 }
 
-func (r *outputRegistry) writeEvents(taskIndex, runNumber int, tool, agent, raw string) (string, error) {
+func (r *outputRegistry) writeEvents(taskDir string, taskIndex, runNumber int, tool, agent, raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
@@ -76,7 +76,13 @@ func (r *outputRegistry) writeEvents(taskIndex, runNumber int, tool, agent, raw 
 		name += "-" + sanitizeFilePart(agent)
 	}
 	name += ".jsonl"
-	path := filepath.Join(r.dir, name)
+	if strings.TrimSpace(taskDir) == "" {
+		taskDir = r.dir
+	}
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		return "", fmt.Errorf("create task event directory: %w", err)
+	}
+	path := filepath.Join(taskDir, name)
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		return "", fmt.Errorf("write agent events: %w", err)
 	}
@@ -86,7 +92,7 @@ func (r *outputRegistry) writeEvents(taskIndex, runNumber int, tool, agent, raw 
 	return path, nil
 }
 
-func (r *outputRegistry) writeStructuredOutput(taskIndex, runNumber int, requestedName, suffix string, data []byte) (string, error) {
+func (r *outputRegistry) writeStructuredOutput(taskDir string, taskIndex, runNumber int, requestedName, suffix string, data []byte) (string, error) {
 	name := cleanStructuredOutputName(requestedName)
 	if name == "" {
 		name = defaultStructuredOutputName(taskIndex, runNumber, suffix)
@@ -95,7 +101,7 @@ func (r *outputRegistry) writeStructuredOutput(taskIndex, runNumber int, request
 		stem := strings.TrimSuffix(name, ext)
 		name = stem + "-" + sanitizeFilePart(suffix) + ext
 	}
-	path, err := r.writeUniqueFile(name, data)
+	path, err := r.writeUniqueFileInDir(taskDir, name, data)
 	if err != nil {
 		return "", fmt.Errorf("write structured output: %w", err)
 	}
@@ -105,7 +111,7 @@ func (r *outputRegistry) writeStructuredOutput(taskIndex, runNumber int, request
 	return path, nil
 }
 
-func (r *outputRegistry) writeTextOutput(taskIndex, runNumber int, requestedName, suffix string, data []byte) (string, error) {
+func (r *outputRegistry) writeTextOutput(taskDir string, taskIndex, runNumber int, requestedName, suffix string, data []byte) (string, error) {
 	name := cleanTextOutputName(requestedName)
 	if name == "" {
 		name = defaultTextOutputName(taskIndex, runNumber, suffix)
@@ -114,7 +120,7 @@ func (r *outputRegistry) writeTextOutput(taskIndex, runNumber int, requestedName
 		stem := strings.TrimSuffix(name, ext)
 		name = stem + "-" + sanitizeFilePart(suffix) + ext
 	}
-	path, err := r.writeUniqueFile(name, data)
+	path, err := r.writeUniqueFileInDir(taskDir, name, data)
 	if err != nil {
 		return "", fmt.Errorf("write text output: %w", err)
 	}
@@ -124,7 +130,13 @@ func (r *outputRegistry) writeTextOutput(taskIndex, runNumber int, requestedName
 	return path, nil
 }
 
-func (r *outputRegistry) writeUniqueFile(name string, data []byte) (string, error) {
+func (r *outputRegistry) writeUniqueFileInDir(dir, name string, data []byte) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = r.dir
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
 	for i := 0; ; i++ {
@@ -132,7 +144,7 @@ func (r *outputRegistry) writeUniqueFile(name string, data []byte) (string, erro
 		if i > 0 {
 			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
-		path := filepath.Join(r.dir, candidate)
+		path := filepath.Join(dir, candidate)
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
 			if os.IsExist(err) {
@@ -180,8 +192,11 @@ func (r *outputRegistry) dirPath() string {
 	return r.dir
 }
 
-func (e *Engine) taskWriters(taskIndex int) (io.Writer, io.Writer, *os.File, string, error) {
-	logDir := filepath.Join(e.root, ".atm", "logs")
+func (e *Engine) taskWriters(taskIndex int, taskDir string) (io.Writer, io.Writer, *os.File, string, error) {
+	if strings.TrimSpace(taskDir) == "" {
+		taskDir = e.taskArtifactDir(taskIndex, "")
+	}
+	logDir := filepath.Join(taskDir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil, nil, nil, "", fmt.Errorf("create task log directory: %w", err)
 	}
@@ -212,7 +227,7 @@ func (e *Engine) writeDetailReport(taskIndex int, status string, info detailRepo
 	if strings.TrimSpace(info.ID) == "" || strings.TrimSpace(info.Report) == "" {
 		return nil
 	}
-	reportPath := filepath.Join(e.root, filepath.FromSlash(info.Report))
+	reportPath := filepath.Join(e.taskArtifactDir(taskIndex, info.ID), "report.md")
 	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
 		return fmt.Errorf("create report directory: %w", err)
 	}
@@ -264,6 +279,18 @@ func (e *Engine) writeDetailReport(taskIndex int, status string, info detailRepo
 		return fmt.Errorf("write detail report: %w", err)
 	}
 	return nil
+}
+
+func (e *Engine) taskArtifactDir(taskIndex int, taskID string) string {
+	name := strings.TrimSpace(taskID)
+	if name == "" {
+		name = fmt.Sprintf("task-%03d", taskIndex+1)
+	}
+	return filepath.Join(e.taskDir, sanitizeFilePart(name))
+}
+
+func (e *Engine) taskReportPath(taskIndex int, taskID string) string {
+	return e.relativeStatePath(filepath.Join(e.taskArtifactDir(taskIndex, taskID), "report.md"))
 }
 
 func (e *Engine) taskLineRangeLabel(taskIndex int) string {

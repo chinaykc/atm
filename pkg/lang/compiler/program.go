@@ -14,14 +14,13 @@ func ParseTask(index int, body string, globals map[string]any, opts CompileOptio
 		return Task{}, err
 	}
 	task := lowerTaskASTToIR(index, t)
-	task.Context = opts.Context
 	return task, nil
 }
 
 func ParseTaskForFile(filePath string, index int, body string, globals map[string]any, opts CompileOptions) (Task, error) {
 	task, err := ParseTask(index, body, globals, normalizeCompileOptions(filePath, opts))
 	if err != nil {
-		return Task{}, fmt.Errorf("parse todo file %q: %w", filePath, err)
+		return Task{}, fmt.Errorf("parse ATM file %q: %w", filePath, err)
 	}
 	return task, nil
 }
@@ -44,12 +43,23 @@ func CompileProgramDiagnostics(sourcePath, content string) (Plan, []Diagnostic) 
 
 func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) (Plan, error) {
 	opts = normalizeCompileOptions(sourcePath, opts)
+	opts.NamedContexts = markdownSectionContextMap(SplitLines(content))
 	blocks := ParseBlocks(content)
 	spans := blockSourceSpans(content, blocks)
 	plan := Plan{SourcePath: sourcePath}
 	defs, err := LoadDefinitionSet(sourcePath, content, opts)
 	if err != nil {
 		return Plan{}, err
+	}
+	if flags, err := ParseFlagDecls(sourcePath, content); err != nil {
+		return Plan{}, err
+	} else {
+		plan.Flags = append(plan.Flags, flags...)
+	}
+	if webhooks, err := ParseWebhookDecls(sourcePath, content); err != nil {
+		return Plan{}, err
+	} else {
+		plan.Webhooks = append(plan.Webhooks, webhooks...)
 	}
 	for _, decl := range defs.Imports {
 		plan.Imports = append(plan.Imports, decl)
@@ -61,7 +71,7 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 		if len(plan.Definitions) > 0 || len(plan.Imports) > 0 {
 			return plan, nil
 		}
-		return Plan{}, fmt.Errorf("no tasks found in todo file %q", sourcePath)
+		return Plan{}, fmt.Errorf("no tasks found in ATM file %q", sourcePath)
 	}
 	diagnostics := diagnosticCollector{source: sourcePath, spans: spans}
 	var warnings []Diagnostic
@@ -72,6 +82,15 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 	for i := 0; i < len(blocks); i++ {
 		body := blocks[i].Body
 		if marker.IsDone(body) || IsBlankLine(body) {
+			continue
+		}
+		flags, ok, err := ParseGlobalFlagBlock(body)
+		if err != nil {
+			diagnostics.addBlock(i, fmt.Errorf("task %d: %w", i+1, err))
+			continue
+		}
+		if ok {
+			_ = flags
 			continue
 		}
 		imports, ok, err := ParseGlobalImportBlock(body)
@@ -156,6 +175,15 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 			plan.MCPs = append(plan.MCPs, mcp)
 			continue
 		}
+		webhooks, ok, err := ParseGlobalWebhookBlock(body)
+		if err != nil {
+			diagnostics.addBlock(i, fmt.Errorf("task %d: %w", i+1, err))
+			continue
+		}
+		if ok {
+			_ = webhooks
+			continue
+		}
 		if info, ok, err := ParseIfBlock(body); err != nil {
 			diagnostics.addBlock(i, fmt.Errorf("task %d: %w", i+1, err))
 			continue
@@ -185,8 +213,9 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 		}
 
 		blockOpts := opts
-		blockOpts.Context = blocks[i].Context
+		blockOpts.Context = blocks[i].LocalContext
 		globals := visibleGlobalVars(plan.Globals, scopeRef{SourcePath: sourcePath, Scope: blocks[i].Scope, Line: blocks[i].StartLine})
+		globals = MergeVars(globals, flagTemplateVars(plan.Flags))
 		globals = inheritParentTaskVars(globals, taskVarsByBlock, blocks[i])
 		task, err := ParseTask(i, body, globals, blockOpts)
 		if err != nil {
@@ -198,20 +227,20 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 		task.SourcePath = sourcePath
 		task.Scope = slices.Clone(blocks[i].Scope)
 		task.Line = blocks[i].StartLine
-		task.Context = blocks[i].Context
 		if i+1 < len(blocks) && TaskHasFlowIf(task) {
 			if elseInfo, ok, err := ParseElseBlock(blocks[i+1].Body); err != nil {
 				diagnostics.addBlock(i+1, fmt.Errorf("task %d: %w", i+2, err))
 				continue
 			} else if ok {
 				elseOpts := opts
-				elseOpts.Context = blocks[i+1].Context
+				elseOpts.Context = blocks[i+1].LocalContext
 				var elseTask Task
 				if elseInfo.HeaderOnly {
 					elseTask = EmptyTask(i+1, globals)
 					warnings = append(warnings, warningDiagnosticAt(sourcePath, "empty /else is a no-op; omit it for clarity", spanAtIndex(spans, i+1)))
 				} else {
 					elseGlobals := visibleGlobalVars(plan.Globals, scopeRef{SourcePath: sourcePath, Scope: blocks[i+1].Scope, Line: blocks[i+1].StartLine})
+					elseGlobals = MergeVars(elseGlobals, flagTemplateVars(plan.Flags))
 					elseGlobals = inheritParentTaskVars(elseGlobals, taskVarsByBlock, blocks[i+1])
 					elseTask, err = ParseTask(i+1, blocks[i+1].Body, elseGlobals, elseOpts)
 					if err != nil {
@@ -224,7 +253,6 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 				elseTask.SourcePath = sourcePath
 				elseTask.Scope = slices.Clone(blocks[i+1].Scope)
 				elseTask.Line = blocks[i+1].StartLine
-				elseTask.Context = blocks[i+1].Context
 				task, err = AttachElseTask(task, elseTask)
 				if err != nil {
 					diagnostics.addBlock(i+1, fmt.Errorf("task %d: %w", i+2, err))
@@ -245,6 +273,24 @@ func CompileProgramWithOptions(sourcePath, content string, opts CompileOptions) 
 	warnings = append(warnings, collectPlanWarnings(sourcePath, plan, opts, spans)...)
 	plan.Diagnostics = warnings
 	return plan, nil
+}
+
+func flagTemplateVars(flags []FlagDecl) map[string]any {
+	vars := make(map[string]any, len(flags))
+	for _, flag := range flags {
+		if flag.HasDefault {
+			if value, err := CoerceFlagValue(flag, []string{flag.Default}); err == nil {
+				vars[flag.Name] = value
+				continue
+			}
+		}
+		if flag.Type == "bool" {
+			vars[flag.Name] = false
+			continue
+		}
+		vars[flag.Name] = "{{" + flag.Name + "}}"
+	}
+	return vars
 }
 
 type duplicateReportID struct {

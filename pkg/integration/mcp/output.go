@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
 )
@@ -70,37 +71,63 @@ func RegisterNetworkOutput(resultFile, schemaText, schemaFormat string) (Network
 }
 
 func newOutputSDKServer(resultFile, schemaText, schemaFormat string) (*mcpsdk.Server, error) {
-	tool, err := outputToolDefinition(schemaText, schemaFormat)
+	schema, resolved, err := parseOutputSchema(schemaText, schemaFormat)
 	if err != nil {
 		return nil, err
 	}
+	tool := outputToolDefinition(schema)
 	server := NewSDKServer("atm-output")
 	AddTool(server, tool, func(_ context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-		return recordOutputResult(resultFile, req.Params.Arguments)
+		return recordOutputResult(resultFile, req.Params.Arguments, resolved)
 	})
 	return server, nil
 }
 
-func outputToolDefinition(schemaText, schemaFormat string) (ToolDefinition, error) {
-	schema, err := outputInputSchema(schemaText, schemaFormat)
-	if err != nil {
-		return ToolDefinition{}, err
-	}
+func outputToolDefinition(schema any) ToolDefinition {
 	return ToolDefinition{
 		Name:        OutputToolName,
 		Description: "Submit the final structured output for the current ATM task. Call this exactly once when the task is complete.",
 		InputSchema: schema,
-	}, nil
+	}
 }
 
-func recordOutputResult(resultFile string, arguments json.RawMessage) (*mcpsdk.CallToolResult, error) {
+func recordOutputResult(resultFile string, arguments json.RawMessage, schema *jsonschema.Resolved) (*mcpsdk.CallToolResult, error) {
 	if !json.Valid(arguments) {
 		return nil, fmt.Errorf("structured output arguments must be valid JSON")
+	}
+	var value any
+	if err := json.Unmarshal(arguments, &value); err != nil {
+		return nil, err
+	}
+	if schema != nil {
+		if err := schema.Validate(value); err != nil {
+			return nil, fmt.Errorf("structured output does not match schema: %w", err)
+		}
 	}
 	if err := WriteOutputResult(resultFile, arguments); err != nil {
 		return nil, err
 	}
 	return textResult("ATM structured output recorded."), nil
+}
+
+func parseOutputSchema(schemaText, schemaFormat string) (any, *jsonschema.Resolved, error) {
+	schema, err := outputInputSchema(schemaText, schemaFormat)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal output schema: %w", err)
+	}
+	var typed jsonschema.Schema
+	if err := json.Unmarshal(data, &typed); err != nil {
+		return nil, nil, fmt.Errorf("parse output JSON schema: %w", err)
+	}
+	resolved, err := typed.Resolve(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve output JSON schema: %w", err)
+	}
+	return schema, resolved, nil
 }
 
 func outputInputSchema(schemaText, schemaFormat string) (any, error) {

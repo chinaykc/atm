@@ -33,7 +33,7 @@ func IsCommentLine(line string) bool {
 
 func IsIgnoredLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	return IsCommentLine(line) || isMarkdownRuleLine(trimmed)
+	return IsCommentLine(line) || isMarkdownRuleLine(trimmed) || strings.HasPrefix(trimmed, "/flag ") || strings.HasPrefix(trimmed, "/webhook new ")
 }
 
 func isMarkdownRuleLine(line string) bool {

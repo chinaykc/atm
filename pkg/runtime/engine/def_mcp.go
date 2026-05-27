@@ -43,11 +43,19 @@ func RunDefsMCPServerCLI(args []string, stdin io.Reader, stdout, stderr io.Write
 	if err != nil {
 		return fmt.Errorf("read defs config: %w", err)
 	}
-	var config compiler.DefMCPRuntime
-	if err := json.Unmarshal(data, &config); err != nil {
+	config, err := parseDefsMCPConfig(data)
+	if err != nil {
 		return fmt.Errorf("parse defs config: %w", err)
 	}
 	return ServeDefsMCP(context.Background(), stdin, stdout, stderr, config)
+}
+
+func parseDefsMCPConfig(data []byte) (compiler.DefMCPRuntime, error) {
+	var config compiler.DefMCPRuntime
+	if err := atmmcp.DecodeStrictJSON(data, &config); err != nil {
+		return compiler.DefMCPRuntime{}, err
+	}
+	return config, nil
 }
 
 func ServeDefsMCP(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, config compiler.DefMCPRuntime) error {
@@ -155,6 +163,15 @@ func (s defsMCPServer) callTool(ctx context.Context, toolName string, arguments 
 	if len(arguments) > 0 {
 		if err := json.Unmarshal(arguments, &args); err != nil {
 			return nil, err
+		}
+	}
+	params := map[string]struct{}{}
+	for _, param := range def.Params {
+		params[param] = struct{}{}
+	}
+	for arg := range args {
+		if _, ok := params[arg]; !ok {
+			return nil, fmt.Errorf("unknown argument %q", arg)
 		}
 	}
 	callArgs := make([]string, 0, len(def.Params))

@@ -11,15 +11,58 @@ import (
 type Plan struct {
 	SourcePath  string
 	Diagnostics []syntax.Diagnostic
+	Flags       []FlagDecl
 	Globals     []GlobalBinding
 	Pools       []PoolDecl
 	DBs         []DBDecl
 	Skills      []SkillDecl
 	MCPs        []MCPDecl
+	Webhooks    []WebhookDecl
 	Imports     []ImportDecl
 	Controls    []ControlBlock
 	Definitions []Definition
 	Tasks       []Task
+}
+
+type FlagDecl struct {
+	BlockIndex  int
+	Type        string
+	Name        string
+	Description string
+	Default     string
+	HasDefault  bool
+	SourcePath  string
+	Scope       []string
+	Line        int
+}
+
+type WebhookDecl struct {
+	BlockIndex int
+	Name       string
+	Provider   string
+	URL        string
+	URLEnv     string
+	Secret     string
+	SecretEnv  string
+	Keywords   []string
+	SourcePath string
+	Scope      []string
+	Line       int
+}
+
+type WebhookCall struct {
+	Name          string
+	Message       string
+	Payload       string
+	PayloadFormat string
+}
+
+type WebhookTaskConfig struct {
+	Use []string `json:"use,omitempty"`
+}
+
+func (c WebhookTaskConfig) IsZero() bool {
+	return len(c.Use) == 0
 }
 
 type GlobalBinding struct {
@@ -34,10 +77,12 @@ type GlobalBinding struct {
 
 type Task struct {
 	BlockIndex       int
+	Name             string
 	SourcePath       string
 	Scope            []string
 	Line             int
 	Context          string
+	ContextRefs      []string
 	SourcePromptHash string
 	HasParent        bool
 	ParentIndex      int
@@ -49,6 +94,7 @@ type Task struct {
 	DB               DBTaskConfig
 	Skill            SkillTaskConfig
 	MCP              MCPTaskConfig
+	Webhook          WebhookTaskConfig
 	Cursor           ExecutionCursor
 }
 
@@ -63,6 +109,7 @@ const (
 	FlowGo      FlowKind = "go"
 	FlowWait    FlowKind = "wait"
 	FlowCall    FlowKind = "call"
+	FlowWebhook FlowKind = "webhook"
 	FlowReturn  FlowKind = "return"
 	FlowExecute FlowKind = "execute"
 )
@@ -77,6 +124,7 @@ type FlowNode struct {
 	Cd             CdCommand
 	Pool           string
 	Call           Call
+	Webhook        WebhookCall
 	Return         ReturnSpec
 	Children       []FlowNode
 	ElseChildren   []FlowNode
@@ -111,6 +159,7 @@ type FlatOp struct {
 	Pool           string
 	Call           Call
 	Return         ReturnSpec
+	Webhook        WebhookCall
 }
 
 const (
@@ -121,6 +170,7 @@ const (
 	FlatOpGo      FlatOpKind = "go"
 	FlatOpWait    FlatOpKind = "wait"
 	FlatOpCall    FlatOpKind = "call"
+	FlatOpWebhook FlatOpKind = "webhook"
 	FlatOpReturn  FlatOpKind = "return"
 	FlatOpExecute FlatOpKind = "execute"
 )
@@ -147,15 +197,19 @@ func (s *OutputSpec) IsStructured() bool {
 }
 
 type RunOptions struct {
-	Resume   bool
-	Args     []string
-	Output   *OutputSpec
-	DBs      []DBRuntime
-	Workdir  string
-	Skills   []SkillRuntime
-	MCPs     []MCPRuntime
-	DefMCP   *DefMCPRuntime
-	DefDepth int
+	Resume          bool
+	ResumeTarget    string
+	ResumeSessionID string
+	Fork            bool
+	ForkTarget      string
+	Args            []string
+	Output          *OutputSpec
+	DBs             []DBRuntime
+	Workdir         string
+	Skills          []SkillRuntime
+	MCPs            []MCPRuntime
+	DefMCP          *DefMCPRuntime
+	DefDepth        int
 }
 
 type ConditionKind string
@@ -376,8 +430,9 @@ func (c MCPTaskConfig) IsZero() bool {
 }
 
 type MCPRuntime struct {
-	Name   string `json:"name"`
-	Config string `json:"config"`
+	Name          string   `json:"name"`
+	Config        string   `json:"config"`
+	ApprovedTools []string `json:"approvedTools,omitempty"`
 }
 
 type DefMCPRuntime struct {
