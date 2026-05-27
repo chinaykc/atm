@@ -1,9 +1,14 @@
 /flag string name Name to echo default:human
 
+
 /pool smoke 2
 
+
 /db new board scope:global persist:run access:admin
+
+
 Simple run-local board. Tasks write fixed values and the final task reads them.
+
 
 /doc
 ```md
@@ -17,25 +22,41 @@ Simple smoke:
 mkdir -p .atm-simple
 printf '{"ok":true}\n' > .atm-simple/gate.json
 SH
+
 Print exactly: hello {{name}}.
 
+
 /if (exist(".atm-simple/gate.json") && json(open(".atm-simple/gate.json")).ok)
+
 /output simple-answer
 ```
 ok:boolean:true when gate passed
 text:string:write simple ok
 ```
+
 Return structured output with ok=true and text="simple ok".
 
+
 /else
+
 Print exactly: simple gate failed.
 
-/for key in [a b] /go smoke
+
+/for key in [a b]
+
+/go smoke
+
 /db use board access:append
+
 Write key `item/{{key}}` to board with value `{{key}} ok`.
+
 
 /wait smoke
 
+
+/task read
+
 /db use board access:read
+
 Read `item/a` and `item/b` from board.
 Print the two values exactly as read.

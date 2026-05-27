@@ -2202,7 +2202,6 @@ func TestMarkdownRootCommandAfterPromptStartsSiblingTask(t *testing.T) {
 
 /task
 Run tests.
-
 /for 2
 Run again {{n}}.
 `
@@ -2215,6 +2214,48 @@ Run again {{n}}.
 	}
 	if strings.TrimSpace(blocks[1].Body) != "/for 2\nRun again {{n}}." {
 		t.Fatalf("unexpected second task body: %q", blocks[1].Body)
+	}
+}
+
+func TestMarkdownConsecutiveHeaderCommandsStayInOneTask(t *testing.T) {
+	content := "/for area in [api docs]\n/go reviewer\nReview {{area}}.\n/wait reviewer\nSummarize.\n"
+	blocks := ParseBlocks(content)
+	if len(blocks) != 2 {
+		t.Fatalf("expected fan-out task and wait task, got %#v", blocks)
+	}
+	if strings.TrimSpace(blocks[0].Body) != "/for area in [api docs]\n/go reviewer\nReview {{area}}." {
+		t.Fatalf("unexpected fan-out body: %q", blocks[0].Body)
+	}
+	if strings.TrimSpace(blocks[1].Body) != "/wait reviewer\nSummarize." {
+		t.Fatalf("unexpected wait body: %q", blocks[1].Body)
+	}
+}
+
+func TestMarkdownSlashInsideHeaderPayloadDoesNotSplitTask(t *testing.T) {
+	content := "/output result\n```\ncommand:string:may contain /wait text\n```\nReturn the schema.\n/wait\n"
+	blocks := ParseBlocks(content)
+	if len(blocks) != 2 {
+		t.Fatalf("expected output task and wait task, got %#v", blocks)
+	}
+	if !strings.Contains(blocks[0].Body, "may contain /wait text") || !strings.Contains(blocks[0].Body, "Return the schema.") {
+		t.Fatalf("unexpected output task body: %q", blocks[0].Body)
+	}
+	if strings.TrimSpace(blocks[1].Body) != "/wait" {
+		t.Fatalf("unexpected wait body: %q", blocks[1].Body)
+	}
+}
+
+func TestMarkdownPromptlessWaitEndsBeforeNextSlashTask(t *testing.T) {
+	content := "/go\nRun in background.\n/wait\n/task read\nRead the result.\n"
+	blocks := ParseBlocks(content)
+	if len(blocks) != 3 {
+		t.Fatalf("expected go, wait, and read tasks, got %#v", blocks)
+	}
+	if strings.TrimSpace(blocks[1].Body) != "/wait" {
+		t.Fatalf("unexpected wait body: %q", blocks[1].Body)
+	}
+	if strings.TrimSpace(blocks[2].Body) != "/task read\nRead the result." {
+		t.Fatalf("unexpected read body: %q", blocks[2].Body)
 	}
 }
 

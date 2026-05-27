@@ -32,8 +32,8 @@ func TestFormatContentFormatsAllTaskBlocks(t *testing.T) {
 	for _, want := range []string{
 		"# Notes",
 		"middle prose",
-		"/task\nfirst\n[done]",
-		"/go\nsecond\n[done]",
+		"/task\n\nfirst\n[done]",
+		"/go\n\nsecond\n[done]",
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("formatted content missing %q:\n%s", want, updated)
@@ -52,7 +52,7 @@ func TestFormatContentNormalizesComposedHeadersWithoutChangingTaskIR(t *testing.
 	if count != 1 {
 		t.Fatalf("block count = %d, want 1", count)
 	}
-	want := "/task branch\n/fork base\n/bash echo setup\n/for 2\n/go workers\nReview the change.\n"
+	want := "/task branch\n\n/fork base\n\n/bash echo setup\n\n/for 2\n\n/go workers\n\nReview the change.\n"
 	if formatted != want {
 		t.Fatalf("formatted content = %q, want %q", formatted, want)
 	}
@@ -78,6 +78,61 @@ func TestFormatContentPreservesNestedProvidersAndFencedPayloads(t *testing.T) {
 	if !strings.Contains(formatted, "/output result\n```schema\nreason:string:why\n```\n") {
 		t.Fatalf("fenced payload was rewritten: %q", formatted)
 	}
+	if !strings.Contains(formatted, `/let value /bash echo "/task"`+"\n\n/output result") {
+		t.Fatalf("expected Markdown spacing between header commands: %q", formatted)
+	}
+	if !strings.Contains(formatted, "```\n\nReport.") {
+		t.Fatalf("expected Markdown spacing after fenced header payload: %q", formatted)
+	}
+}
+
+func TestFormatContentAddsMarkdownSpacingWithoutChangingTaskIR(t *testing.T) {
+	cases := []string{
+		"/pool reviewer 2\n\n/for area in [api docs] /go reviewer\nReview {{area}}.\n/wait reviewer\nSummarize results.\n",
+		"/output result\n```schema\nok:boolean:true when done\n```\nReturn JSON.\n",
+		"/bash <<'SH'\nprintf ok\nSH\nRun after setup.\n",
+	}
+	for _, input := range cases {
+		beforePlan, err := compiler.CompileProgram("todo.md", input)
+		if err != nil {
+			t.Fatalf("compile before format: %v\n%s", err, input)
+		}
+		formatted, count := FormatContent(input)
+		if count == 0 {
+			t.Fatalf("expected formatted blocks for:\n%s", input)
+		}
+		afterPlan, err := compiler.CompileProgram("todo.md", formatted)
+		if err != nil {
+			t.Fatalf("compile after format: %v\n%s", err, formatted)
+		}
+		beforeTasks := normalizeTasksForSemanticCompare(beforePlan.Tasks)
+		afterTasks := normalizeTasksForSemanticCompare(afterPlan.Tasks)
+		if !reflect.DeepEqual(beforeTasks, afterTasks) {
+			t.Fatalf("formatted task IR changed\ninput:\n%s\nformatted:\n%s\nbefore: %#v\nafter:  %#v", input, formatted, beforeTasks, afterTasks)
+		}
+		if again, _ := FormatContent(formatted); again != formatted {
+			t.Fatalf("format is not idempotent:\n%s", again)
+		}
+	}
+}
+
+func TestFormatContentUsesTwoBlankLinesBetweenTasks(t *testing.T) {
+	formatted, count := FormatContent("/task\none\n/task\ntwo\n")
+	if count != 2 {
+		t.Fatalf("block count = %d, want 2", count)
+	}
+	if formatted != "/task\n\none\n\n\n/task\n\ntwo\n" {
+		t.Fatalf("unexpected task spacing:\n%q", formatted)
+	}
+}
+
+func normalizeTasksForSemanticCompare(tasks []compiler.Task) []compiler.Task {
+	out := make([]compiler.Task, len(tasks))
+	copy(out, tasks)
+	for i := range out {
+		out[i].Line = 0
+	}
+	return out
 }
 
 func TestUntagContentCanRemoveDoneAndRunningMarkers(t *testing.T) {
@@ -101,7 +156,7 @@ func TestFormatAppendPromptFormatsBlocksAndRequiresTask(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("block count = %d, want 1", count)
 	}
-	if formatted != "/go\nnew\n[done]\n" {
+	if formatted != "/go\n\nnew\n[done]\n" {
 		t.Fatalf("formatted prompt = %q", formatted)
 	}
 
@@ -127,7 +182,7 @@ func TestAppendFileAddsBlankLineBeforeFormattedPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(updated) != "/task\nexisting\n\n/go\nnew\n[done]\n" {
+	if string(updated) != "/task\nexisting\n\n/go\n\nnew\n[done]\n" {
 		t.Fatalf("updated content = %q", updated)
 	}
 }

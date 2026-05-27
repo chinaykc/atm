@@ -1846,7 +1846,7 @@ func TestOutputCommandInGoBranchAddsSuffixAndRendersAgentVars(t *testing.T) {
 	}
 }
 
-func TestPromptCallLineIsRejectedInsideExplicitTask(t *testing.T) {
+func TestPromptCallLineStartsSiblingTaskInsideExplicitTask(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "taskdoc.md")
 	body := "/def whereami\nReturn only the city.\n\n/return {{agent.last_message}}\n\n## Weather\n\n/task\nWeather for\n/call whereami\ntoday.\n"
@@ -1854,9 +1854,14 @@ func TestPromptCallLineIsRejectedInsideExplicitTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
-	err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")})
-	if err == nil || !strings.Contains(err.Error(), "not allowed in prompt body") {
-		t.Fatalf("expected prompt /call rejection, got %v", err)
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
+	}
+	events := strings.Join(runner.snapshot(), "\n")
+	for _, want := range []string{"Weather for", "today."} {
+		if !strings.Contains(events, want) {
+			t.Fatalf("expected sibling task event %q, got:\n%s", want, events)
+		}
 	}
 }
 

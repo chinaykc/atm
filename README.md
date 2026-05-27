@@ -59,19 +59,31 @@ Create `todo.md`:
 
 ```txt
 /for 3 until tests pass
+
 Run the project test suite and fix any failures.
 
+
+
 /go
+
 Check the setup documentation for steps that are missing, stale, or unclear.
 Write findings to `checks/setup.md`.
 
+
+
 /go
+
 Check examples, scripts, and configuration files for commands that no longer work.
 Write findings to `checks/commands.md`.
 
+
+
 /wait
 
+
+
 /task
+
 Read `checks/setup.md` and `checks/commands.md`, then fix the confirmed project issues.
 ```
 
@@ -130,6 +142,7 @@ This ordinary Markdown is context for tasks in this section.
 ## Documentation
 
 /task docs
+
 Review the docs with the section context above.
 ```
 
@@ -170,9 +183,13 @@ Any ATM file can be run directly, registered as a project-local command, or expo
 
 ```md
 /flag string area project area to review
+
 /flag bool fix apply safe fixes default:false
 
+
+
 /task
+
 Review {{area}}. If {{fix}} is true, apply safe fixes.
 ```
 
@@ -249,7 +266,7 @@ CLI command quick reference:
 | `atm check [files...]` | Validate ATM files without running agents. |
 | `atm report ...` | Summarize task reports and audit state. |
 | `atm clean ...` | Remove generated state/report blocks or audit artifacts. |
-| `atm format <file>` | Normalize task headers and generated state layout. |
+| `atm format <file>` | Normalize task header spacing and generated state layout. |
 | `atm serve [file]` | Serve one ATM file as an HTTP API. |
 | `atm serve register/scan/unregister/list` | Manage registered API ATM files. |
 
@@ -263,7 +280,7 @@ Common examples:
 | `./atm check --open todo.md` | Open a temporary plan flowchart in a browser. |
 | `./atm check --plan todo.md --html plan.html` | Write the same flowchart to a file. |
 | `./atm append todo.md 'Review README.'` | Append a formatted task to a source or active run. |
-| `./atm format todo.md` | Normalize task headers and generated state layout. |
+| `./atm format todo.md` | Normalize task header spacing and generated state layout. |
 | `./atm report` | Summarize the latest run for the current project. |
 | `./atm clean result.todo.md` | Remove generated status blocks while keeping audit artifacts. |
 | `./atm clean --repair-ids result.todo.md` | Repair duplicate generated report ids. |

@@ -60,7 +60,7 @@ This task sees the Discuss heading as context.
 This section is documentation again.
 ```
 
-Ordinary Markdown before a task is preserved and passed as section context. A task continues until the next root-level task-start/control command after a blank line, the next same-or-higher heading, a report block, or the end of the document. Header-only blocks such as standalone `/let` declarations are scoped declarations when they have no prompt; the same `/let` line followed by prompt text is the current task's header. Deeper headings remain part of the task prompt.
+Ordinary Markdown before a task is preserved and passed as section context. A task continues until the next root-level task-start/control command, the next same-or-higher heading, a report block, or the end of the document. Header-only blocks such as standalone `/let` declarations are scoped declarations when they have no prompt; the same `/let` line followed by prompt text is the current task's header. Deeper headings remain part of the task prompt.
 
 If a deeper heading contains its own task-start command, ATM treats that command as a child-heading task. The child-heading task inherits the parent task's root prompt plus the ordinary Markdown in its own heading path. It does not inherit sibling child-heading text or sibling tasks:
 
@@ -93,7 +93,7 @@ Commands can be normalized with:
 atm format todo.txt
 ```
 
-Commands are only recognized before prompt text starts. A slash command written later in the prompt is an error unless it is a root-level sibling task after a blank line.
+Commands are only recognized before prompt text starts. A slash command written later at the start of a line begins a root-level sibling task; put literal command-looking text inside prose, quotes, or a fenced block when it should remain prompt text.
 
 Task header commands can be written on one line or across multiple lines. Declaration commands such as `/task`, `/fork`, `/args`, `/output`, `/db use`, `/skill use`, and `/webhook use` are merged into the current task configuration. Flow commands such as `/cd`, `/bash`, `/call`, `/webhook name`, `/for`, `/go`, and `/wait` run in the order they appear.
 
@@ -1124,7 +1124,7 @@ Rewrite generated state into a tidy block layout:
 atm format todo.txt
 ```
 
-Generated markers are moved to their own line when needed. Generated `> [!ATM]` result blocks use block formatting. Composed task headers are normalized to one command per line while preserving their merged configuration and flow order.
+Generated markers are moved to their own line when needed. Generated `> [!ATM]` result blocks use block formatting. Composed task headers are normalized to one command paragraph each, with readable spacing between tasks, while preserving their merged configuration and flow order.
 
 ## Environment Variables
 

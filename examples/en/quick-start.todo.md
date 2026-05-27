@@ -7,12 +7,16 @@ Quick start smoke:
 ```
 
 /task answer
+
 /output quick-answer
 ```
 ok:boolean:true when this task ran
 text:string:write quick ok
 ```
+
 Return structured output with ok=true and text="quick ok".
 
+
 /for item in [one two]
+
 Print exactly: quick item {{item}}.

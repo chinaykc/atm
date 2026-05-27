@@ -59,19 +59,31 @@ go build -o atm ./cmd/atm
 
 ```txt
 /for 3 until 测试通过
+
 运行项目测试套件，并修复发现的问题。
 
+
+
 /go
+
 检查安装和使用文档，找出缺失、过期或不清楚的步骤。
 把发现的问题写入 `checks/setup.md`。
 
+
+
 /go
+
 检查示例、脚本和配置文件，找出已经无法工作的命令。
 把发现的问题写入 `checks/commands.md`。
 
+
+
 /wait
 
+
+
 /task
+
 读取 `checks/setup.md` 和 `checks/commands.md`，并修复确认存在的项目问题。
 ```
 
@@ -130,6 +142,7 @@ Windows PowerShell：
 ## 文档
 
 /task docs
+
 结合上面的本节上下文审查文档。
 ```
 
@@ -170,9 +183,13 @@ Windows PowerShell：
 
 ```md
 /flag string area 要审查的项目区域
+
 /flag bool fix 是否应用安全修复 default:false
 
+
+
 /task
+
 审查 {{area}}。如果 {{fix}} 为 true，应用安全修复。
 ```
 
@@ -249,7 +266,7 @@ CLI 命令速查：
 | `atm check [files...]` | 校验 ATM 文件，不启动 agent。 |
 | `atm report ...` | 汇总任务报告和审计状态。 |
 | `atm clean ...` | 移除生成状态/report block 或审计产物。 |
-| `atm format <file>` | 规范化任务头和生成状态布局。 |
+| `atm format <file>` | 规范化任务头间距和生成状态布局。 |
 | `atm serve [file]` | 把单个 ATM 文件服务成 HTTP API。 |
 | `atm serve register/scan/unregister/list` | 管理已注册的 API ATM 文件。 |
 
@@ -263,7 +280,7 @@ CLI 命令速查：
 | `./atm check --open todo.md` | 在浏览器中打开临时计划流程图。 |
 | `./atm check --plan todo.md --html plan.html` | 把同一个流程图写入文件。 |
 | `./atm append todo.md 'Review README.'` | 向源文件或 active run 追加格式化任务。 |
-| `./atm format todo.md` | 规范化任务头和生成状态布局。 |
+| `./atm format todo.md` | 规范化任务头间距和生成状态布局。 |
 | `./atm report` | 汇总当前项目最近一次运行。 |
 | `./atm clean result.todo.md` | 移除生成状态块，保留审计产物。 |
 | `./atm clean --repair-ids result.todo.md` | 修复重复的生成 report id。 |

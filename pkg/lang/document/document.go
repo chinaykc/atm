@@ -28,3 +28,7 @@ func MarkdownScopeSegment(heading MarkdownHeading) string {
 func FormatTaskHeaderBody(body string) string {
 	return compiler.FormatTaskHeaderBody(body)
 }
+
+func FormatTaskMarkdownSpacing(body string) string {
+	return compiler.FormatTaskMarkdownSpacing(body)
+}

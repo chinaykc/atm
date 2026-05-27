@@ -279,4 +279,4 @@ printf '/task\n审查 README。\n' | atm append todo.txt
 atm format todo.txt
 ```
 
-组合 task header 会规范化为每行一个命令；配置合并结果和流程命令顺序保持不变。
+组合 task header 会规范化为每个命令一个 Markdown 段落，并在任务之间加入更易读的间距；配置合并结果和流程命令顺序保持不变。

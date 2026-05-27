@@ -35,17 +35,29 @@ Create `todo.txt`:
 
 ```txt
 /task
+
 Run go test ./... and fix failures.
 
+
+
 /for 3 until tests pass
+
 Keep fixing until the tests pass.
 
+
+
 /go
+
 Review README and find unclear setup instructions.
+
+
 
 /wait
 
+
+
 /task
+
 Summarize the changes and verification.
 ```
 

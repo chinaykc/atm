@@ -7,12 +7,16 @@
 ```
 
 /task answer
+
 /output quick-answer
 ```
 ok:boolean:任务运行后为 true
 text:string:写 quick ok
 ```
+
 返回结构化输出：ok=true，text="quick ok"。
 
+
 /for item in [one two]
+
 只输出：quick item {{item}}。

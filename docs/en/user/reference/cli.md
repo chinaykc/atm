@@ -67,7 +67,7 @@ atm clean result.todo.md --reports --state --logs
 atm clean --repair-ids result.todo.md
 ```
 
-`format` writes composed task headers one command per line while preserving flow order, and normalizes generated state layout. `clean` removes generated status/report blocks and optionally audit artifacts.
+`format` writes composed task headers one command paragraph each, adds readable spacing between tasks while preserving flow order, and normalizes generated state layout. `clean` removes generated status/report blocks and optionally audit artifacts.
 
 ## Dynamic Commands
 

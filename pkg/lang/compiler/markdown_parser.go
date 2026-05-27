@@ -226,7 +226,11 @@ func parseMarkdownTaskBlocks(content string, _ []string) []Block {
 			finalize(i)
 			continue
 		}
-		if previousMarkdownLineBlank(lines, i) && isMarkdownV2BlockStartLine(trimmed) {
+		if isMarkdownV2BlockStartLine(trimmed) && isCompletePromptlessTaskDeclaration(content[offsets[blockStart]:offsets[i]]) {
+			finalize(i)
+			continue
+		}
+		if isMarkdownV2BlockStartLine(trimmed) && markdownTaskBodyHasPrompt(content[offsets[blockStart]:offsets[i]]) {
 			if blockNestedHeading {
 				start := offsets[blockStart]
 				end := offsets[i]
@@ -265,6 +269,68 @@ func parseMarkdownTaskBlocks(content string, _ []string) []Block {
 		blocks[len(blocks)-1].Sep += content[prefixStart:]
 	}
 	return blocks
+}
+
+func isCompletePromptlessTaskDeclaration(body string) bool {
+	if strings.TrimSpace(body) == "" {
+		return false
+	}
+	task, err := parseTask(0, body, nil, CompileOptions{Root: "."})
+	return err == nil &&
+		strings.TrimSpace(task.prompt) == "" &&
+		task.wait &&
+		!task.goRun &&
+		len(task.steps) == 0 &&
+		len(task.flow) == 1 &&
+		task.flow[0].kind == astOpWait
+}
+
+func markdownTaskBodyHasPrompt(body string) bool {
+	lines := SplitLines(body)
+	fence := outputFenceInfo{}
+	fencePending := false
+	heredocDelim := ""
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if fence.marker != "" {
+			if isFenceClose(line, fence) {
+				fence = outputFenceInfo{}
+			}
+			continue
+		}
+		if fencePending {
+			if parsed, ok := parseAnyFenceStart(line); ok {
+				fence = parsed
+			}
+			fencePending = false
+			continue
+		}
+		if heredocDelim != "" {
+			if trimmed == heredocDelim {
+				heredocDelim = ""
+			}
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "/") {
+			return true
+		}
+		if isMultilineLetCommandLine(trimmed) {
+			_, next := collectLetMultilineValue(lines, i+1)
+			i = next - 1
+			continue
+		}
+		if startsFencedPayloadCommand(trimmed) {
+			fencePending = true
+		}
+		if delim, ok := lineHeredocDelimiter(trimmed); ok {
+			heredocDelim = delim
+		}
+	}
+	return false
 }
 
 func inheritedPromptFromTaskBody(body string) string {

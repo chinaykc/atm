@@ -17,7 +17,7 @@ Second task.
 Third task, running in the background.
 ```
 
-Blank lines stay inside the current task prompt. A task ends when a later root-level task-start/control command appears after a blank line, when a same-or-higher Markdown heading appears, when a report block appears, or at end of file.
+Blank lines stay inside the current task prompt. A task ends when a later root-level task-start/control command appears, when a same-or-higher Markdown heading appears, when a report block appears, or at end of file.
 
 ## Comments And Rules
 
@@ -137,7 +137,7 @@ Task commands are recognized before prompt text starts:
 Fix tests.
 ```
 
-Slash text inside a prompt is prompt text. If it looks like an ATM command, parsing fails and asks you to move it to the task header or start a new sibling/child task after a blank line.
+Slash text inside a prompt starts a new sibling task when it is written at the beginning of a line. Put literal command-looking text inside prose, quotes, or a fenced block when it should remain prompt text.
 
 Format task files with:
 
@@ -145,6 +145,6 @@ Format task files with:
 atm format todo.txt
 ```
 
-Formatting writes composed task headers as one command per line without changing execution order.
+Formatting writes composed task headers as one command paragraph each, adds readable spacing between tasks, and preserves execution order.
 
 Direct `run` keeps generated state out of the source file by default. Use `atm clean` on `~/.atm/runs/<run-id>/result.todo.md` when you need to remove generated state from a result document.

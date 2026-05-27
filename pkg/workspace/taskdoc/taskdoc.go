@@ -65,7 +65,9 @@ func FormatContent(content string) (string, int) {
 	for i := range blocks {
 		blocks[i].Body = document.FormatTaskHeaderBody(blocks[i].Body)
 		blocks[i].Body = langformat.BlockBody(blocks[i].Body)
+		blocks[i].Body = document.FormatTaskMarkdownSpacing(blocks[i].Body)
 	}
+	spaceTaskBlocks(blocks)
 	return renderBlocks(blocks), len(blocks)
 }
 
@@ -222,6 +224,7 @@ func FormatAppendPrompt(prompt string) (string, int, error) {
 	for i := range blocks {
 		blocks[i].Body = document.FormatTaskHeaderBody(blocks[i].Body)
 		blocks[i].Body = langformat.BlockBody(blocks[i].Body)
+		blocks[i].Body = document.FormatTaskMarkdownSpacing(blocks[i].Body)
 	}
 	var buf bytes.Buffer
 	buf.WriteString(renderBlocks(blocks))
@@ -239,6 +242,30 @@ func renderBlocks(blocks []document.Block) string {
 		buf.WriteString(b.Sep)
 	}
 	return buf.String()
+}
+
+func spaceTaskBlocks(blocks []document.Block) {
+	for i := 1; i < len(blocks); i++ {
+		if strings.TrimSpace(blocks[i].Prefix) == "" {
+			blocks[i].Prefix = ""
+		}
+	}
+	for i := 0; i+1 < len(blocks); i++ {
+		blocks[i].Sep = twoBlankLinesSeparator(blocks[i].Body)
+	}
+}
+
+func twoBlankLinesSeparator(body string) string {
+	switch {
+	case strings.HasSuffix(body, "\r\n"):
+		return "\r\n\r\n"
+	case strings.HasSuffix(body, "\n"):
+		return "\n\n"
+	case strings.Contains(body, "\r\n"):
+		return "\r\n\r\n\r\n"
+	default:
+		return "\n\n\n"
+	}
 }
 
 func updateFileContent(filePath string, update func(string) (string, bool, error)) error {

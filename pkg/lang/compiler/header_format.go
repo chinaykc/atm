@@ -62,6 +62,125 @@ func FormatTaskHeaderBody(body string) string {
 	return out.String()
 }
 
+func FormatTaskMarkdownSpacing(body string) string {
+	lines := SplitLines(body)
+	units, promptStart := taskHeaderUnitsForMarkdownSpacing(lines)
+	if len(units) == 0 || promptStart < 0 {
+		return body
+	}
+	var out strings.Builder
+	for i, unit := range units {
+		for _, line := range unit {
+			out.WriteString(line)
+		}
+		if i+1 < len(units) || promptStart < len(lines) {
+			out.WriteString(blankLineAfterUnit(unit))
+		}
+	}
+	for _, line := range lines[promptStart:] {
+		out.WriteString(line)
+	}
+	return out.String()
+}
+
+func taskHeaderUnitsForMarkdownSpacing(lines []string) ([][]string, int) {
+	var units [][]string
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isGeneratedStateLine(trimmed) {
+			return nil, -1
+		}
+		if !strings.HasPrefix(trimmed, "/") {
+			return units, i
+		}
+		unit := []string{line}
+		if isMultilineLetCommandLine(trimmed) {
+			_, next := collectLetMultilineValue(lines, i+1)
+			unit = append(unit, lines[i+1:next]...)
+			units = append(units, trimTrailingBlankLines(unit))
+			i = next - 1
+			continue
+		}
+		if startsFencedPayloadCommand(trimmed) {
+			next := appendFollowingFence(lines, i+1, &unit)
+			units = append(units, unit)
+			i = next - 1
+			continue
+		}
+		if delim, ok := lineHeredocDelimiter(trimmed); ok {
+			next := appendHeredocPayload(lines, i+1, delim, &unit)
+			units = append(units, unit)
+			i = next - 1
+			continue
+		}
+		units = append(units, unit)
+	}
+	return units, len(lines)
+}
+
+func appendFollowingFence(lines []string, start int, unit *[]string) int {
+	if start >= len(lines) {
+		return start
+	}
+	fence, ok := parseAnyFenceStart(lines[start])
+	if !ok {
+		return start
+	}
+	*unit = append(*unit, lines[start])
+	for i := start + 1; i < len(lines); i++ {
+		*unit = append(*unit, lines[i])
+		if isFenceClose(lines[i], fence) {
+			return i + 1
+		}
+	}
+	return len(lines)
+}
+
+func appendHeredocPayload(lines []string, start int, delim string, unit *[]string) int {
+	for i := start; i < len(lines); i++ {
+		*unit = append(*unit, lines[i])
+		if strings.TrimSpace(lines[i]) == delim {
+			return i + 1
+		}
+	}
+	return len(lines)
+}
+
+func trimTrailingBlankLines(lines []string) []string {
+	end := len(lines)
+	for end > 0 && IsBlankLine(lines[end-1]) {
+		end--
+	}
+	return lines[:end]
+}
+
+func isGeneratedStateLine(trimmed string) bool {
+	return trimmed == "[done]" ||
+		strings.HasPrefix(trimmed, "[done|") ||
+		strings.HasPrefix(trimmed, "[running|") ||
+		strings.HasPrefix(trimmed, "<!-- atm:report ") ||
+		strings.HasPrefix(trimmed, "> [!ATM]")
+}
+
+func blankLineAfterUnit(lines []string) string {
+	if len(lines) == 0 {
+		return "\n"
+	}
+	last := lines[len(lines)-1]
+	switch {
+	case strings.HasSuffix(last, "\r\n"):
+		return "\r\n"
+	case strings.HasSuffix(last, "\n"):
+		return "\n"
+	default:
+		return "\n\n"
+	}
+}
+
 func formatHeaderLine(trimmed, original string) string {
 	fields, err := commandFields(trimmed)
 	if err != nil || len(fields) < 2 || preservesNestedProvider(fields) {

@@ -1663,7 +1663,7 @@ func TestFormatSubcommandMovesMarkersToOwnLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(updated) != "/task\nprompt\n[done]\n" {
+	if string(updated) != "/task\n\nprompt\n[done]\n" {
 		t.Fatalf("unexpected content: %q", updated)
 	}
 }
@@ -1681,7 +1681,7 @@ func TestAppendFormatsAndTargetsTodoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(updated) != "/task\nexisting\n\n/go\nnew\n[done]\n" {
+	if string(updated) != "/task\nexisting\n\n/go\n\nnew\n[done]\n" {
 		t.Fatalf("unexpected content: %q", updated)
 	}
 }
@@ -1699,7 +1699,7 @@ func TestAppendSubcommandAcceptsPositionalTodoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(updated), "/task\nnew work\n") {
+	if !strings.Contains(string(updated), "/task\n\nnew work\n") {
 		t.Fatalf("unexpected content: %q", updated)
 	}
 }

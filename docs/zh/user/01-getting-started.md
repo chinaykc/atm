@@ -34,15 +34,29 @@ go build -o atm ./cmd/atm
 创建 `todo.txt`：
 
 ```txt
+/task
+
 运行 go test ./...，修复失败。
 
+
+
 /for 3 until tests pass
+
 继续修复，直到测试通过。
 
+
+
 /go
+
 审查 README，找出安装说明不清楚的地方。
 
+
+
 /wait
+
+
+
+/task
 
 总结本次修改和验证结果。
 ```
