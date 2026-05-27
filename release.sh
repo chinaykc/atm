@@ -19,9 +19,9 @@ if git -C "$root" rev-parse --short=12 HEAD >/dev/null 2>&1; then
   commit="$(git -C "$root" rev-parse --short=12 HEAD)"
 fi
 if [[ "${SOURCE_DATE_EPOCH:-}" != "" ]]; then
-  build_date="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+  build_date="$(python3 -c 'from datetime import datetime, timezone; import os; print(datetime.fromtimestamp(int(os.environ["SOURCE_DATE_EPOCH"]), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 else
-  build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  build_date="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 fi
 ldflags=(
   "-s"
@@ -35,14 +35,64 @@ ldflags=(
   "github.com/chinaykc/atm/pkg/app/cli.Date=$build_date"
 )
 
-targets=(
-  "linux/amd64"
-  "linux/arm64"
-  "darwin/amd64"
-  "darwin/arm64"
-  "windows/amd64"
-  "windows/arm64"
-)
+if [[ "${ATM_RELEASE_TARGETS:-}" != "" ]]; then
+  read -r -a targets <<< "$ATM_RELEASE_TARGETS"
+else
+  targets=(
+    "linux/amd64"
+    "linux/arm64"
+    "darwin/amd64"
+    "darwin/arm64"
+    "windows/amd64"
+    "windows/arm64"
+  )
+fi
+
+zip_dir() {
+  local source_dir="$1"
+  local zip_path="$2"
+  python3 - "$source_dir" "$zip_path" <<'PY'
+import os
+import sys
+import zipfile
+
+source_dir = os.path.abspath(sys.argv[1])
+zip_path = os.path.abspath(sys.argv[2])
+root = os.path.dirname(source_dir)
+
+with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    for dirpath, dirnames, filenames in os.walk(source_dir):
+        dirnames.sort()
+        filenames.sort()
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        if rel_dir != ".":
+            info = zipfile.ZipInfo(rel_dir.rstrip("/") + "/")
+            info.external_attr = (0o755 << 16) | 0x10
+            archive.writestr(info, b"")
+        for filename in filenames:
+            path = os.path.join(dirpath, filename)
+            arcname = os.path.relpath(path, root).replace(os.sep, "/")
+            archive.write(path, arcname)
+PY
+}
+
+write_sha256() {
+  local file="$1"
+  local out="$2"
+  python3 - "$file" "$out" <<'PY'
+import hashlib
+import os
+import sys
+
+path = sys.argv[1]
+digest = hashlib.sha256()
+with open(path, "rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+with open(sys.argv[2], "w", newline="\n") as handle:
+    handle.write(f"{digest.hexdigest()}  {os.path.basename(path)}\n")
+PY
+}
 
 rm -rf "$out_dir"
 mkdir -p "$staging_dir" "$cache_dir"
@@ -69,15 +119,13 @@ for target in "${targets[@]}"; do
   )
 
   cp "$root/LICENSE" "$root/README.md" "$root/README.zh-CN.md" "$root/SECURITY.md" "$package_dir/"
-  (
-    cd "$staging_dir"
-    zip -X -q -r "$out_dir/$name.zip" "$name"
-  )
+  zip_dir "$package_dir" "$out_dir/$name.zip"
+  write_sha256 "$out_dir/$name.zip" "$out_dir/$name.sha256"
 done
 
 (
   cd "$out_dir"
-  sha256sum *.zip > checksums.txt
+  cat ./*.sha256 | sort -k2 > checksums.txt
 )
 
 rm -rf "$staging_dir"
