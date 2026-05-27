@@ -8,8 +8,10 @@
 *.test
 *.out
 /bin/
-/dist/
 /build/
+
+# Release artifacts
+/dist/
 
 # Test and coverage artifacts
 coverage.out
