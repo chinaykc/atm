@@ -13,14 +13,25 @@ esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out_dir="$root/dist/$version"
 cache_dir="${GOCACHE:-$out_dir/.gocache}"
+python_bin="${PYTHON:-}"
+if [[ "$python_bin" == "" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python_bin="python3"
+  elif command -v python >/dev/null 2>&1; then
+    python_bin="python"
+  else
+    echo "python3 or python is required to build release artifacts" >&2
+    exit 1
+  fi
+fi
 commit="unknown"
 if git -C "$root" rev-parse --short=12 HEAD >/dev/null 2>&1; then
   commit="$(git -C "$root" rev-parse --short=12 HEAD)"
 fi
 if [[ "${SOURCE_DATE_EPOCH:-}" != "" ]]; then
-  build_date="$(python3 -c 'from datetime import datetime, timezone; import os; print(datetime.fromtimestamp(int(os.environ["SOURCE_DATE_EPOCH"]), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+  build_date="$("$python_bin" -c 'from datetime import datetime, timezone; import os; print(datetime.fromtimestamp(int(os.environ["SOURCE_DATE_EPOCH"]), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 else
-  build_date="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+  build_date="$("$python_bin" -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 fi
 ldflags=(
   "-s"
@@ -50,7 +61,7 @@ fi
 write_sha256() {
   local file="$1"
   local out="$2"
-  python3 - "$file" "$out" <<'PY'
+  "$python_bin" - "$file" "$out" <<'PY'
 import hashlib
 import os
 import sys

@@ -89,6 +89,7 @@ jobs:
           cd "dist/$VERSION"
           cat ./*.sha256 | sort -k2 > checksums.txt
           sha256sum -c checksums.txt
+          rm ./*.sha256
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

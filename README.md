@@ -30,9 +30,9 @@ If a runner is not on `PATH`, pass its executable path with `--codex /path/to/co
 
 ## Install
 
-Download the binary for your platform from GitHub Releases and put it on `PATH`.
+Download the binary for your platform from GitHub Releases and put it on `PATH`. The release also includes `checksums.txt` for verification.
 
-On Linux or macOS:
+For example, on Linux `amd64`:
 
 ```sh
 chmod +x atm-linux-amd64

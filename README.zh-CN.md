@@ -30,9 +30,9 @@ ATM 会把这个文件编译成 agent 执行计划。任务可以顺序执行、
 
 ## 安装
 
-从 GitHub Releases 下载对应平台的二进制文件，并把它放到 `PATH` 中。
+从 GitHub Releases 下载对应平台的二进制文件，并把它放到 `PATH` 中。Release 中同时提供 `checksums.txt` 供校验下载文件。
 
-Linux 或 macOS：
+例如 Linux `amd64`：
 
 ```sh
 chmod +x atm-linux-amd64
