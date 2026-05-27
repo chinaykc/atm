@@ -1,14 +1,16 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
-	"github.com/chinaykc/atm/pkg/lang/compiler"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chinaykc/atm/pkg/lang/compiler"
 )
 
 func TestMain(m *testing.M) {
@@ -896,8 +898,14 @@ func TestPlanSubcommandAcceptsFlagsAfterPositionalFile(t *testing.T) {
 	if err := Run([]string{"check", "--plan", file, "-json"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `"source": "`+file+`"`) {
-		t.Fatalf("expected JSON plan output, got:\n%s", out.String())
+	var plan struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &plan); err != nil {
+		t.Fatalf("parse JSON plan output: %v\n%s", err, out.String())
+	}
+	if plan.Source != file {
+		t.Fatalf("expected JSON plan source %q, got %q\n%s", file, plan.Source, out.String())
 	}
 }
 
@@ -1046,7 +1054,30 @@ func TestCheckSubcommandRejectsInvalidDSL(t *testing.T) {
 	if err := Run([]string{"check", "-json", file}, &out, &out); err == nil {
 		t.Fatal("expected invalid DSL JSON check to fail")
 	}
-	for _, want := range []string{`"diagnostics": [`, `"severity": "error"`, `"source": "` + file + `"`, `"block": 1`, `"line": 1`, `"column": 1`, "requires a parenthesized expression"} {
+	var diagnostics struct {
+		Files []struct {
+			File        string `json:"file"`
+			Diagnostics []struct {
+				Severity string `json:"severity"`
+				Source   string `json:"source"`
+				Block    int    `json:"block"`
+				Line     int    `json:"line"`
+				Column   int    `json:"column"`
+				Message  string `json:"message"`
+			} `json:"diagnostics"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &diagnostics); err != nil {
+		t.Fatalf("parse JSON diagnostics: %v\n%s", err, out.String())
+	}
+	if len(diagnostics.Files) != 1 || diagnostics.Files[0].File != file || len(diagnostics.Files[0].Diagnostics) != 1 {
+		t.Fatalf("unexpected JSON diagnostics:\n%s", out.String())
+	}
+	got := diagnostics.Files[0].Diagnostics[0]
+	if got.Severity != "error" || got.Source != file || got.Block != 1 || got.Line != 1 || got.Column != 1 || !strings.Contains(got.Message, "requires a parenthesized expression") {
+		t.Fatalf("unexpected JSON diagnostic: %#v\n%s", got, out.String())
+	}
+	for _, want := range []string{`"diagnostics": [`, `"severity": "error"`, `"block": 1`, `"line": 1`, `"column": 1`, "requires a parenthesized expression"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected JSON diagnostics to contain %q, got:\n%s", want, out.String())
 		}
