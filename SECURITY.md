@@ -18,5 +18,5 @@ before public disclosure when the issue is confirmed.
 ## Scope
 
 ATM runs local commands and delegates prompts to external agent CLIs selected by
-the user. Treat todo files as executable workflow input, and review third-party
-todo files before running them.
+the user. Treat ATM files as executable workflow input, and review third-party
+ATM files before running them.

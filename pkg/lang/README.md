@@ -23,7 +23,7 @@ runtime/view/integration/app
 
 Consumers should choose the narrowest package that matches their task:
 
-- Use `syntax` or `compiler.ParseSyntax` to build editor features or linters.
 - Use `compiler.CompileProgram` to validate and lower a document into executable IR.
 - Use `ir` for runtime-facing data structures, flow traversal, and run-option/value helpers.
+- Use `syntax` for shared diagnostic and source-span types.
 - Use `marker` and `document` for file maintenance without compiling a plan.

@@ -1,0 +1,271 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">ATM pixel mascot logo, green bill version</title>
+  <desc id="desc">A pixel-art cartoon ATM inside a Markdown panel, smiling and spitting green bills.</desc>
+  <defs>
+    <clipPath id="screen-clip-usd">
+      <rect x="260" y="132" width="120" height="48"/>
+    </clipPath>
+  </defs>
+  <style>
+    .px { shape-rendering: crispEdges; }
+    .bill-a { animation: billA 3s linear infinite; opacity: 0; }
+    .bill-b { animation: billB 3s linear infinite .05s; opacity: 0; }
+    .bill-c { animation: billC 3s linear infinite .1s; opacity: 0; }
+    .bill-d { animation: billD 3s linear infinite .15s; opacity: 0; }
+    .bill-e { animation: billE 3s linear infinite .2s; opacity: 0; }
+    .bill-f { animation: billF 3s linear infinite .25s; opacity: 0; }
+    .bill-left-a { animation: billLeftA 3s linear infinite .08s; opacity: 0; }
+    .bill-left-b { animation: billLeftB 3s linear infinite .16s; opacity: 0; }
+    .bill-left-c { animation: billLeftC 3s linear infinite .24s; opacity: 0; }
+    .md-feed-a { animation: docFeed 9s linear infinite; opacity: 0; }
+    .md-feed-b { animation: docFeed 9s linear infinite 3s; opacity: 0; }
+    .md-feed-c { animation: docFeed 9s linear infinite 6s; opacity: 0; }
+    .eyes { animation: blink 3.8s steps(1, end) infinite; transform-origin: 320px 151px; }
+    .arm-left { animation: waveLeft 1.2s steps(2, end) infinite; transform-origin: 221px 202px; }
+    .arm-right { animation: waveRight 1.2s steps(2, end) infinite; transform-origin: 419px 202px; }
+    .screen-shine { animation: scan 2.1s linear infinite; }
+    .slot { animation: slotPulse 1.45s steps(2, end) infinite; }
+
+    @keyframes billA {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(42px, -26px) rotate(-4deg); opacity: 1; }
+      68% { transform: translate(126px, -62px) rotate(8deg); opacity: 1; }
+      84%, 100% { transform: translate(190px, -48px) rotate(18deg); opacity: 0; }
+    }
+    @keyframes billB {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(56px, -8px) rotate(6deg); opacity: 1; }
+      68% { transform: translate(138px, 22px) rotate(-6deg); opacity: 1; }
+      84%, 100% { transform: translate(182px, 54px) rotate(-16deg); opacity: 0; }
+    }
+    @keyframes billC {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(42px, 18px) rotate(8deg); opacity: 1; }
+      68% { transform: translate(116px, 62px) rotate(16deg); opacity: 1; }
+      84%, 100% { transform: translate(160px, 98px) rotate(24deg); opacity: 0; }
+    }
+    @keyframes billD {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(64px, -12px) rotate(8deg); opacity: 1; }
+      68% { transform: translate(150px, 0) rotate(18deg); opacity: 1; }
+      84%, 100% { transform: translate(198px, 20px) rotate(28deg); opacity: 0; }
+    }
+    @keyframes billE {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(38px, -38px) rotate(-8deg); opacity: 1; }
+      68% { transform: translate(112px, -86px) rotate(-14deg); opacity: 1; }
+      84%, 100% { transform: translate(168px, -88px) rotate(-24deg); opacity: 0; }
+    }
+    @keyframes billF {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(34px, 30px) rotate(4deg); opacity: 1; }
+      68% { transform: translate(108px, 94px) rotate(12deg); opacity: 1; }
+      84%, 100% { transform: translate(154px, 130px) rotate(20deg); opacity: 0; }
+    }
+    @keyframes billLeftA {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(-44px, -22px) rotate(4deg); opacity: 1; }
+      68% { transform: translate(-124px, -52px) rotate(-8deg); opacity: 1; }
+      84%, 100% { transform: translate(-184px, -34px) rotate(-18deg); opacity: 0; }
+    }
+    @keyframes billLeftB {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(-52px, 8px) rotate(-5deg); opacity: 1; }
+      68% { transform: translate(-126px, 42px) rotate(8deg); opacity: 1; }
+      84%, 100% { transform: translate(-170px, 68px) rotate(18deg); opacity: 0; }
+    }
+    @keyframes billLeftC {
+      0%, 48% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+      52% { transform: translate(-34px, 28px) rotate(-7deg); opacity: 1; }
+      68% { transform: translate(-104px, 88px) rotate(-16deg); opacity: 1; }
+      84%, 100% { transform: translate(-152px, 126px) rotate(-28deg); opacity: 0; }
+    }
+    @keyframes docFeed {
+      0% { transform: translate(0, 40px); opacity: 0; }
+      3% { opacity: 1; }
+      10% { transform: translate(0, 6px); opacity: 1; }
+      13% { transform: translate(0, -18px); opacity: 0; }
+      14%, 100% { transform: translate(0, -18px); opacity: 0; }
+    }
+    @keyframes blink {
+      0%, 90%, 100% { transform: scaleY(1); }
+      92%, 94% { transform: scaleY(.18); }
+    }
+    @keyframes waveLeft {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-9deg); }
+    }
+    @keyframes waveRight {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(9deg); }
+    }
+    @keyframes scan {
+      from { transform: translateY(-44px); opacity: .15; }
+      45% { opacity: .5; }
+      to { transform: translateY(48px); opacity: .05; }
+    }
+    @keyframes slotPulse {
+      0%, 100% { fill: #3a1f10; }
+      50% { fill: #76421f; }
+    }
+  </style>
+
+  <rect width="640" height="360" rx="0" fill="#fff2dc" class="px"/>
+  <rect x="34" y="34" width="572" height="292" fill="#fffaf0" stroke="#d9974a" stroke-width="8" class="px"/>
+  <rect x="34" y="34" width="572" height="42" fill="#ffd7a0" stroke="#d9974a" stroke-width="8" class="px"/>
+  <rect x="58" y="50" width="18" height="10" fill="#ef5d5d" class="px"/>
+  <rect x="86" y="50" width="18" height="10" fill="#f3c950" class="px"/>
+  <rect x="114" y="50" width="18" height="10" fill="#54c878" class="px"/>
+  <text x="320" y="62" text-anchor="middle" font-family="monospace" font-size="22" font-weight="700" fill="#2a1c16"># ATM.md</text>
+
+  <g class="px" opacity=".9">
+    <rect x="74" y="104" width="82" height="12" fill="#d9974a"/>
+    <rect x="74" y="128" width="122" height="12" fill="#eec08c"/>
+    <rect x="74" y="152" width="96" height="12" fill="#eec08c"/>
+    <rect x="74" y="186" width="86" height="12" fill="#d9974a"/>
+    <rect x="74" y="210" width="120" height="12" fill="#eec08c"/>
+    <rect x="486" y="104" width="78" height="12" fill="#d9974a"/>
+    <rect x="486" y="128" width="74" height="12" fill="#eec08c"/>
+    <rect x="486" y="152" width="100" height="12" fill="#eec08c"/>
+    <rect x="486" y="254" width="70" height="12" fill="#d9974a"/>
+    <rect x="486" y="278" width="92" height="12" fill="#eec08c"/>
+  </g>
+
+  <rect x="208" y="292" width="224" height="22" fill="rgba(72, 38, 14, .24)" class="px"/>
+
+  <g class="px arm-left">
+    <rect x="178" y="188" width="34" height="18" fill="#b96519"/>
+    <rect x="156" y="174" width="28" height="28" fill="#ffb23f"/>
+    <rect x="150" y="180" width="12" height="16" fill="#fff7c9"/>
+  </g>
+  <g class="px arm-right">
+    <rect x="428" y="188" width="34" height="18" fill="#b96519"/>
+    <rect x="456" y="174" width="28" height="28" fill="#ffb23f"/>
+    <rect x="478" y="180" width="12" height="16" fill="#fff7c9"/>
+  </g>
+
+  <g class="px">
+    <rect x="220" y="94" width="200" height="204" fill="#b96519"/>
+    <rect x="232" y="82" width="176" height="26" fill="#ffd052"/>
+    <rect x="232" y="106" width="176" height="180" fill="#ffb23f"/>
+    <rect x="252" y="124" width="136" height="64" fill="#3a1f10"/>
+    <rect x="260" y="132" width="120" height="48" fill="#76421f"/>
+    <rect x="260" y="132" width="120" height="8" fill="#b96519" opacity=".7"/>
+    <g clip-path="url(#screen-clip-usd)">
+      <rect class="screen-shine" x="260" y="132" width="120" height="8" fill="#fff06d" opacity=".35"/>
+    </g>
+    <g class="eyes">
+      <rect x="288" y="148" width="16" height="18" fill="#fff7c9"/>
+      <rect x="336" y="148" width="16" height="18" fill="#fff7c9"/>
+    </g>
+    <rect x="308" y="168" width="24" height="8" fill="#fff7c9"/>
+    <rect x="268" y="205" width="104" height="22" fill="#3a1f10"/>
+    <rect class="slot" x="276" y="211" width="88" height="10" fill="#3a1f10"/>
+    <rect x="278" y="240" width="24" height="16" fill="#fff7c9"/>
+    <rect x="308" y="240" width="24" height="16" fill="#fff7c9"/>
+    <rect x="338" y="240" width="24" height="16" fill="#fff7c9"/>
+    <rect x="244" y="286" width="36" height="20" fill="#b96519"/>
+    <rect x="360" y="286" width="36" height="20" fill="#b96519"/>
+  </g>
+
+  <g class="px md-feed-a">
+    <rect x="284" y="216" width="72" height="68" fill="#fffaf0" stroke="#d9974a" stroke-width="5"/>
+    <text x="326" y="246" font-family="monospace" font-size="15" font-weight="700" fill="#2a1c16">MD</text>
+    <text x="294" y="261" font-family="monospace" font-size="13" font-weight="700" fill="#9a5a24">/go</text>
+    <rect x="294" y="272" width="28" height="5" fill="#eec08c"/>
+  </g>
+  <g class="px md-feed-b">
+    <rect x="288" y="218" width="68" height="64" fill="#fffaf0" stroke="#d9974a" stroke-width="5"/>
+    <text x="328" y="247" font-family="monospace" font-size="14" font-weight="700" fill="#2a1c16">MD</text>
+    <text x="296" y="262" font-family="monospace" font-size="12" font-weight="700" fill="#9a5a24">/for</text>
+    <rect x="297" y="272" width="26" height="5" fill="#eec08c"/>
+  </g>
+  <g class="px md-feed-c">
+    <rect x="286" y="220" width="66" height="62" fill="#fffaf0" stroke="#d9974a" stroke-width="5"/>
+    <text x="325" y="248" font-family="monospace" font-size="13" font-weight="700" fill="#2a1c16">MD</text>
+    <text x="294" y="263" font-family="monospace" font-size="11" font-weight="700" fill="#9a5a24">/wait</text>
+    <rect x="295" y="272" width="24" height="5" fill="#eec08c"/>
+  </g>
+  <g class="px bill-a">
+    <g transform="translate(-66 6)">
+    <rect x="372" y="201" width="78" height="34" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="386" y="211" width="50" height="14" fill="#ccffe0"/>
+    <rect x="402" y="211" width="18" height="14" fill="#23894f"/>
+    <rect x="408" y="207" width="6" height="22" fill="#23894f"/>
+    <rect x="406" y="215" width="10" height="6" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-b">
+    <g transform="translate(-66 6)">
+    <rect x="372" y="201" width="70" height="30" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="385" y="210" width="44" height="12" fill="#ccffe0"/>
+    <rect x="398" y="210" width="16" height="12" fill="#23894f"/>
+    <rect x="403" y="207" width="6" height="18" fill="#23894f"/>
+    <rect x="402" y="214" width="8" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-c">
+    <g transform="translate(-66 6)">
+    <rect x="372" y="201" width="66" height="30" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="384" y="210" width="42" height="12" fill="#ccffe0"/>
+    <rect x="396" y="210" width="16" height="12" fill="#23894f"/>
+    <rect x="401" y="207" width="6" height="18" fill="#23894f"/>
+    <rect x="400" y="214" width="8" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-d">
+    <g transform="translate(-66 6)">
+    <rect x="372" y="201" width="72" height="32" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="386" y="210" width="46" height="13" fill="#ccffe0"/>
+    <rect x="400" y="210" width="16" height="12" fill="#23894f"/>
+    <rect x="405" y="207" width="6" height="18" fill="#23894f"/>
+    <rect x="404" y="214" width="8" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-e">
+    <g transform="translate(-66 6)">
+    <rect x="372" y="201" width="64" height="28" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="384" y="209" width="40" height="11" fill="#ccffe0"/>
+    <rect x="396" y="209" width="15" height="11" fill="#23894f"/>
+    <rect x="401" y="206" width="5" height="17" fill="#23894f"/>
+    <rect x="400" y="213" width="7" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-f">
+    <g transform="translate(-66 6)">
+    <rect x="372" y="201" width="60" height="28" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="383" y="209" width="38" height="11" fill="#ccffe0"/>
+    <rect x="395" y="209" width="14" height="11" fill="#23894f"/>
+    <rect x="400" y="206" width="5" height="17" fill="#23894f"/>
+    <rect x="399" y="213" width="7" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-left-a">
+    <g transform="translate(116 6)">
+    <rect x="190" y="201" width="74" height="32" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="204" y="210" width="46" height="13" fill="#ccffe0"/>
+    <rect x="219" y="210" width="16" height="12" fill="#23894f"/>
+    <rect x="224" y="207" width="6" height="18" fill="#23894f"/>
+    <rect x="223" y="214" width="8" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-left-b">
+    <g transform="translate(110 6)">
+    <rect x="196" y="201" width="66" height="30" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="208" y="210" width="42" height="12" fill="#ccffe0"/>
+    <rect x="221" y="210" width="15" height="11" fill="#23894f"/>
+    <rect x="226" y="207" width="5" height="17" fill="#23894f"/>
+    <rect x="225" y="214" width="7" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+  <g class="px bill-left-c">
+    <g transform="translate(104 6)">
+    <rect x="202" y="201" width="60" height="28" fill="#4fd27d" stroke="#23894f" stroke-width="5"/>
+    <rect x="213" y="209" width="38" height="11" fill="#ccffe0"/>
+    <rect x="225" y="209" width="14" height="11" fill="#23894f"/>
+    <rect x="230" y="206" width="5" height="17" fill="#23894f"/>
+    <rect x="229" y="213" width="7" height="5" fill="#ccffe0"/>
+    </g>
+  </g>
+
+</svg>

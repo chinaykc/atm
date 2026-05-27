@@ -2,253 +2,271 @@
 
 [English](README.md)
 
-**ATM** 是 **Agent Task Markdown**：一种基于 Markdown 的 Agent 任务调度 DSL（domain-specific language 领域专用语言）。
+<p align="center">
+  <img src="docs/assets/atm-logo-cny.svg" alt="ATM" width="420">
+</p>
 
-当你手上有几件想交给编码代理处理的事，又不想引入数据库、守护进程、Web UI 或工作流系统时，就可以用它。把提示词和斜杠命令写进 Markdown 或纯文本任务文件，用 `atm plan` 预览执行计划，`atm` 会执行任务并把完成状态写回同一个文件。
+**ATM** 是 **Agent Task Markdown** 的缩写：一种面向编码代理的 Markdown runbook 格式。
 
-面向用户的完整手册见：[docs/user/README.md](docs/user/README.md)。
+它适合放在一次性 prompt 和完整工作流系统之间：当一个项目需要让 agent 做多件事，例如运行检查、审查文档、验证示例、修复问题时，聊天窗口很快会变得难以审计、难以复用，也难以看清任务之间的关系。ATM 让你把这些工作写进一个可读的 `todo.md`：项目背景仍然是普通 Markdown，少量斜杠命令负责描述任务如何执行。
+
+ATM 会把这个文件编译成 agent 执行计划。任务可以顺序执行、按条件重试、并行检查、等待汇合，并产出结构化结果。你可以在启动任何 agent 前先预览计划，再交给 Codex 或 Claude Code 执行；工作流还可以复用为本地命令或 HTTP 接口。
+
+## 适合场景
+
+- 让 AI 起草和迭代 ATM 文件，让工作流随着项目一起演进，而不是只留在聊天记录里。
+- 把重复 prompt 工作沉淀成可复用 runbook，减少反复交代上下文，释放 agent 的执行能力。
+- 轻松验证不同的协作模式，从顺序审查、并行检查到 multi-agent 风格的交接，而不必先搭建工作流服务。
+- 把复杂项目流程写成 Markdown，让人类和 agent 都能阅读、审查、执行和改进。
+- 当某个 agent 工作流变成日常操作时，把它复用为本地命令或小型 HTTP API。
+
+## 前置条件
+
+- 默认 runner 需要 `codex` 在 `PATH` 中；使用 `--tool claude` 时需要 Claude Code 在 `PATH` 中。
+- 支持 Linux、macOS 和 Windows。
+- 只有从源码构建时才需要 Go 1.25 或更高版本。
+
+如果 runner 不在 `PATH` 中，可以用 `--codex /path/to/codex` 或 `--claude /path/to/claude` 指定可执行文件路径。
+
+## 安装
+
+从 GitHub Releases 下载对应平台的压缩包，解压后把 `atm` 可执行文件放到 `PATH` 中即可。
+
+检查已安装的二进制：
+
+```sh
+atm --version
+```
+
+如果要从源码构建：
+
+```sh
+go build -o atm ./cmd/atm
+```
 
 ## 快速开始
 
-构建 CLI：
-
-```sh
-go build -buildvcs=false -o atm ./cmd/atm
-```
-
-创建 `todo.txt`：
+创建 `todo.md`：
 
 ```txt
-运行测试套件，并修复发现的问题。
-
 /for 3 until 测试通过
-整理仓库，让它达到可以发布的状态。
+运行项目测试套件，并修复发现的问题。
 
 /go
-审查 README，找出不清楚的安装步骤。
+检查安装和使用文档，找出缺失、过期或不清楚的步骤。
+把发现的问题写入 `checks/setup.md`。
+
+/go
+检查示例、脚本和配置文件，找出已经无法工作的命令。
+把发现的问题写入 `checks/commands.md`。
 
 /wait
+
+/task
+读取 `checks/setup.md` 和 `checks/commands.md`，并修复确认存在的项目问题。
 ```
 
-运行：
+先预览执行计划。`check` 过程不会启动 agent：
 
 ```sh
-./atm
+./atm check --plan todo.md
 ```
 
-不传文件参数时，`atm` 会使用第一个存在的默认文件：`todo.txt`、`todo.md` 或 `toto.md`。
-
-显式子命令写法等价：
+在浏览器中打开计划流程图：
 
 ```sh
-./atm run -file todo.txt
+./atm check --open todo.md
 ```
 
-`run` 是持续协作模式：它会反复重扫活跃 todo 文件，所以命令仍在运行时追加的任务可能被同一次 `run` 执行。需要一次性快照执行时使用 `exec`：
+执行任务：
 
 ```sh
-./atm exec todo.txt
+./atm run todo.md
 ```
 
-`run` 和 `exec` 的区别只在任务集合策略：`run` 持续重扫活跃文档，`exec` 固定启动瞬间看到的 task block 快照。二者使用同一套执行器、工具参数、输出目录、状态文件、报告文件和锁机制。`exec` 启动后追加的任务仍保留在文档中，但留给后续的 `run` 或 `exec` 执行。
+默认命令也是 `run`，所以下面写法等价：
+
+```sh
+./atm todo.md
+```
 
 Windows PowerShell：
 
 ```powershell
-.\atm.exe -file todo.txt
+.\atm.exe run todo.md
 ```
 
-默认情况下，`atm` 通过 Codex 执行任务：
+显式选择 runner：
 
 ```sh
-./atm -tool codex -file todo.txt
+./atm run --tool codex todo.md
+./atm run --tool claude todo.md
 ```
 
-如果要使用 Claude Code：
+也可以写成 `--tool claude-code`。一次运行可以把多个 ATM 文件排队执行：
 
 ```sh
-./atm -tool claude -file todo.txt
+./atm run --jobs 4 todo.md rollout.md followup.md
 ```
 
-也可以写成 `-tool claude-code`。如果可执行文件不在 `PATH` 中，可以用 `-codex /path/to/codex` 或 `-claude /path/to/claude` 指定路径。
+## ATM 文件格式
 
-一次运行可以把多个 todo 文件排队执行：
-
-```sh
-./atm run todo.txt rollout.md followup.md
-./atm run -file todo.txt -file rollout.md
-```
-
-## 常见用法
-
-- 按顺序跑一组发布检查任务。
-- 用 `/for 3 until 测试通过` 让所选工具最多尝试 3 次，直到测试通过。
-- 用 `/go` 启动互不依赖的审查任务，再用 `/wait` 等它们结束。
-- 用 `atm plan` 在不执行任何命令的情况下预览执行顺序。
-- 把任务状态留在一个可以编辑、审阅、提交或丢弃的文本文件里。
-
-## Todo 格式
-
-ATM 支持纯文本任务文件和 Markdown 任务文档。在 Markdown 中，标题只表示上下文和作用域，不再表示可执行任务。任务可以从 `/task`、任务启动控制命令（如 `/for`、`/go`、`/call`、`/bash`、`/wait`、`/if` 或 `/else`）开始，也可以由 `/let`、`/args`、`/cd`、`/output`、`/db use`、`/skill use`、`/mcp use` 等 task header 命令加后续 prompt 形成。`/task` 主要用于完全没有 header/control 命令的普通 prompt 任务。
-
-任务前的普通 Markdown 会保留在文件中，并作为该 section 内任务的上下文。Prompt 正文从 task header 之后开始；正文中的 slash 命令会报错，除非它在空行之后作为根层新任务开始。
-
-在 Markdown task header 中用 `/context #Heading` 可以把其他 section 的普通文档加入当前任务上下文；用 `/doc text` 或 `/doc` 后接 fenced block 可以写只给人看的说明，且不进入 agent 上下文。
-
-旧式文本任务块中的整行注释会被忽略：第一个非空白字符是 `#` 的行、`<!-- ... -->` 这类 HTML 注释块，以及 `[//]: # (...)` 这类 Markdown 引用式注释。可执行内容中只由三个或更多 `-` 或 `=` 组成的独立 Markdown 分隔线会被忽略。
-
-```txt
-发送给所选工具的第一个提示词。
-
-/for 2
-把这个提示词执行两次。
-
-/resume /for 3
-继续上一次工具会话。
-```
-
-Markdown 任务文档示例：
+在 Markdown ATM 文件中，标题提供上下文和作用域，标题本身不会启动任务。可执行任务从 `/task`、`/for`、`/go`、`/wait`、`/if`、`/else` 等控制命令开始，也可以从带后续 prompt 的任务头命令开始。
 
 ```md
-# 发布说明
+# 项目背景
 
-这里是普通文档，不会执行。
+这里的普通 Markdown 会作为本节任务的上下文。
 
-## Verify
+## 文档
 
-/for 2
-运行 go test ./...，并修复失败。
-
-/task
-运行 go vet ./...，修复可操作的问题。
-
-## discuss
-
-/task
-整个 section 是一个 prompt。
-
-空行会保留在 prompt 中。
+/task docs
+结合上面的本节上下文审查文档。
 ```
 
-命令写在任务块顶部，位于提示词正文之前。支持的命令有：
+任务命令速查：
 
-- `/resume`：继续所选工具最近一次会话。
-- `/args ...`：向所选工具追加 CLI 参数，例如 `/args --yolo`。
-- `/cd path`：准备并进入当前任务工作区；目录不存在时默认创建。用 `/cd --must-exist path` 要求目录必须已存在。
-- `/let name value`：定义模板变量；单独的 `/let` 块对当前 Markdown scope 内的后续任务可见。
-- `/let name /bash script`：把 bash stdout 定义为懒变量；只有变量被渲染或读取时才执行。
-- `/let name /call def [args...]`：懒调用可复用定义，并把返回值绑定为变量。
-- `/bash script`：在提示词执行前运行 bash；多行脚本支持 heredoc 写法。
-- `/context #Heading`：把另一个 Markdown section 的普通文档加入当前任务上下文。
-- `/doc text` 或 `/doc` 加 fenced block：写只给人看的说明，不进入 agent 上下文。
-- `/output [file]`：要求通过临时 MCP 工具提交结构化 JSON，并保存为输出产物。
-- `/db new/use/access/ignore ...`：声明任务数据库，并控制每个任务块的 MCP 访问权限。
-- `/skill new/use/ignore ...`：声明本地 skill，并把选中的 skill 挂载到 `/cd` 工作区。
-- `/mcp new/use/ignore ...` 和 `/mcp def use ...`：注入临时 MCP server，并把选中的定义暴露成 MCP 工具。
-- `/def name [params...]` 加 `/return`：定义可复用任务模板。
-- `/call name [args...]`：作为任务/header 命令执行定义；需要把返回值渲染进 prompt 时，在 prompt 前用 `/let name /call ...` 绑定。
-- `/return ...`：在定义中返回文本、bash 输出或多行模板。
-- `/import [namespace from] path`：从其他 todo 文件导入定义。
-- `/pool name max [buffer]`：声明一个具名后台工作池。
-- `/for 3 [until condition]`：最多执行 `3` 次；`{{n}}` 会渲染为从 `0` 开始的循环序号。
-- `/for until(expr)`：一直执行，直到本地表达式为 true。带括号的 `until(...)` 是确定性本地控制流；自然语言 `until condition` 仍走工具侧 MCP 检查。
-- `/if (expr)` 或 `/if 自然语言`：用本地表达式或 MCP check 选择一个分支；`/if` 和 `/else` 不嵌套。
-- `/for name in files()`、`/for name in walkFiles("src")`、`/for name in dirs()` 或 `/for name in [a b]`：按文件、目录或显式列表逐项执行。文件和目录枚举只能通过 `files()`、`dirs()`、`walkFiles()`、`walkDirs()` 表达式 helper 表达；旧的 `/for file`、`/for dir` 和 `/for path` 控制头无效。
-- `/go [pool]`：在后台启动这个任务，也可以提交到具名池。
-- `/wait [pool]`：等待之前的 `/go` 任务，也可以只等待某个具名池。
+| 命令 | 用途 |
+| --- | --- |
+| `/task [name]` | 开始一个 prompt 任务，并可选地命名 agent 会话。 |
+| `/resume name` | 继续此前命名的 agent 会话。 |
+| `/fork name` | 从具名会话分叉，并基于该历史运行当前任务。 |
+| `/args ...` | 给当前任务的所选 runner 追加 CLI 参数。 |
+| `/cd path` | 准备并进入任务工作区。 |
+| `/let name value` | 定义模板变量，或定义来自 `/bash`、`/call` 的 lazy 值。 |
+| `/bash script` | 在 prompt 前运行 shell 脚本。 |
+| `/output [file]` | 保存任务输出；带 schema fence 时要求结构化 JSON。 |
+| `/db ...` | 挂载本地 JSON 任务数据库，作为记忆或黑板。 |
+| `/skill ...` | 声明或挂载当前任务工作区可用的本地 skill。 |
+| `/mcp ...` | 声明 MCP server、暴露定义，或授权任务访问 MCP 工具。 |
+| `/webhook ...` | 声明 Webhook 目标或发送 Webhook 通知。 |
+| `/def` + `/call` | 定义并复用任务模板。 |
+| `/return ...` | 从定义中返回文本、bash 输出或多行模板。 |
+| `/import ...` | 从其他 ATM 文件导入定义。 |
+| `/pool name max [buffer]` | 声明具名后台工作池。 |
+| `/if condition` | 用本地表达式或结构化检查选择分支。 |
+| `/else` | 为 `/if` 提供另一条分支。 |
+| `/for ...` | 重试、循环，或按文件、目录、范围、列表逐项执行。 |
+| `/go [pool]` | 在后台启动任务。 |
+| `/wait [pool]` | 等待此前启动的后台任务。 |
+| `/flag ...` | 为 `atm run`、动态命令和 `serve` API 声明参数。 |
+| `/context #Heading` | 把其他 Markdown section 的普通文档加入任务上下文。 |
+| `/doc ...` | 写只给人看的说明，不进入 agent 上下文。 |
 
-Prompt、`/bash` 脚本、`until` 条件、`/args` 参数值和 `/cd` 路径都会用 Go `text/template` 渲染。`{{n}}`、`{{file}}`、`{{branch}}` 这类变量在进入作用域后可用。新模板也可以使用 `{{.n}}`、`{{index .Vars "file"}}`、`{{var "file"}}`，以及 `{{if .n}}...{{end}}` 这类控制结构。
+完整格式见 [用户手册](docs/zh/user/README.md) 和 [命令参考](docs/zh/commands.md)。
 
-对于 `until`，`atm` 会挂载名为 `atm_report_check` 的结构化临时 MCP 检查工具；检查 agent 必须通过该工具提交结果。完成和运行中状态会写成以 `> [!ATM]` 开头的 Markdown 引用块。Codex 和 Claude 的输出会从结构化流中读取，所以运行时控制台会展示当前任务行号范围、工具调用名和 assistant 消息，并默认把最近 1 条 assistant 消息呈现在引用块里。
+## 复用工作流
 
-`/db` 会挂载临时 MCP server 作为任务数据库。用 `scope` 控制哪些任务块能看到数据库，用 `persist` 选择本次 run 内存储或项目级存储，用 `access` 控制当前任务块是只读、可追加、可写还是可删除。
+任意 ATM 文件都可以直接运行、注册成本地命令，或通过 `serve` 暴露为接口。需要让复用工作流接收 CLI 或 API 参数时，再用 `/flag` 声明参数。
 
-后台分支会受全局并发上限控制。默认是 `NumCPU`，可用 `-jobs N` 修改。具名 `/pool` 会增加单个池子的并发限制，但仍共享全局上限。
+```md
+/flag string area 要审查的项目区域
+/flag bool fix 是否应用安全修复 default:false
 
-每次运行还会默认把产物写到 `.atm/YYYYMMDDHHMMSS[-N]`。可以用 `-output DIR` 或 `-o DIR` 指定目录。产物包括每次 agent 运行的原生 JSONL 事件流、`db/` 下的 run-local 数据库文件，以及 `result.md`，也就是执行结束时 todo 文档的副本，便于 `clean` 或 `untag` 后追查。
+/task
+审查 {{area}}。如果 {{fix}} 为 true，应用安全修复。
+```
+
+注册成本地命令：
+
+```sh
+./atm flag register workflows/review.md --name review
+./atm review -area docs -fix
+```
+
+把 ATM 文件服务成 HTTP API：
+
+```sh
+./atm serve workflows/review.md --addr 127.0.0.1:8080
+```
+
+需要项目内可复用 API 时，可以注册路由：
+
+```sh
+./atm serve register workflows/review.md --path /review
+./atm serve --addr 127.0.0.1:8080
+```
+
+`GET /review` 会同步运行。`POST /review` 会创建异步 job，`GET /jobs/{id}` 查询 job 状态。`GET /openapi.json` 返回自动生成的 OpenAPI 元数据。
+
+## 运行结果
+
+`atm run` 会使用托管 live 工作副本；运行退出时，原始源文件会恢复为执行前内容。
+
+| 内容 | 默认位置 |
+| --- | --- |
+| 运行工作区 | `~/.atm/runs/<run-id>/` |
+| 结果文档 | `~/.atm/runs/<run-id>/result.todo.md` |
+| 任务报告、日志、事件流和输出 | `~/.atm/runs/<run-id>/tasks/<task-id>/` |
+| 项目级动态命令产物 | `.atm/commands/<command>/<timestamp>/` |
+| 项目级 API 产物 | `.atm/api/runs/...` 和 `.atm/api/jobs/...` |
+
+可以用 `ATM_HOME` 改变 ATM home。`--output DIR` 或 `-o DIR` 可以改写共享输出目录，但源文件备份、任务目录和 `result.todo.md` 仍保存在托管运行工作区。
+
+未完成的 run 可以继续执行：
+
+```sh
+./atm resume <run-id>
+./atm resume --last
+```
+
+如果 run 中断时源文件仍被占位文件隐藏，可以恢复最近保存的源文件副本：
+
+```sh
+./atm resume --restore-source
+```
+
+## 工作原理
+
+ATM 会先把 ATM 文件编译成静态执行计划。`atm check --plan` 只打印计划，不运行 bash 脚本，也不启动 agent，所以可以先审查循环、分支、后台任务、工作池和任务依赖。
+
+执行 `atm run` 时，ATM 会把源 ATM 文件和 import 文件复制到托管运行工作区，在 live 工作副本上执行任务，并在 run 退出时恢复原始源文件。状态块、报告、runner 事件流、结构化输出和日志都会写入运行工作区，方便审计和恢复。
+
+自然语言检查，例如 `/for 3 until 测试通过`，通过结构化工具调用实现。每次尝试后，ATM 会向 runner 暴露一个作用域受限的 MCP 检查工具；当前默认通过本机 loopback streamable HTTP endpoint 提供，并要求模型用机器可读字段报告条件是否满足，而不是让系统从自由文本里猜结果。`/for until(expr)` 这类本地表达式形式不经过模型，直接由 ATM 确定性求值。
+
+ATM 把需要结构化输出的边界都放到作用域受限的 MCP 工具里完成，原因是现代编码代理经过训练后，通常能比较可靠地使用工具和 MCP 风格 schema。凡是 ATM 需要结构化判断或结果的地方，例如 `until` 判断、带 schema 的 `/output`，或由 definition 暴露的 helper 输出，都会暴露一个作用域很窄的本地 MCP endpoint，并读取工具结果，而不是解析 assistant 的自然语言文本。`/db`、`/webhook` 等能力也会在 agent 需要受控访问本地状态或外部通知时使用作用域受限的工具。
 
 ## 常用命令
 
-当 `atm` 仍在运行时追加任务。如果当前 run 已经退出，需要再次运行 `atm` 才会执行追加任务：
+CLI 命令速查：
 
-```sh
-./atm append -file todo.txt "为解析器补充聚焦测试。"
-```
+| 命令 | 用途 |
+| --- | --- |
+| `atm --version` | 输出 CLI 版本；release 构建会包含 commit 和构建时间。 |
+| `atm run [files...]` | 执行待处理 prompt block；也是默认命令。 |
+| `atm resume ...` | 继续未完成的托管 run，或恢复保存的源文件；支持 `--last` 和 `--restore-source`。 |
+| `atm flag register/scan/unregister/list` | 管理注册为动态 CLI 命令的 ATM 文件。 |
+| `atm append <file> [prompt...]` | 向源文件或 active run 追加格式化任务。 |
+| `atm check [files...]` | 校验 ATM 文件，不启动 agent。 |
+| `atm report ...` | 汇总任务报告和审计状态。 |
+| `atm clean ...` | 移除生成状态/report block 或审计产物。 |
+| `atm format <file>` | 规范化任务头和生成状态布局。 |
+| `atm serve [file]` | 把单个 ATM 文件服务成 HTTP API。 |
+| `atm serve register/scan/unregister/list` | 管理已注册的 API ATM 文件。 |
 
-格式化 todo 文件：
+常用示例：
 
-```sh
-./atm format -file todo.txt
-```
-
-移除生成的状态块：
-
-```sh
-./atm untag -file todo.txt
-```
-
-汇总当前任务报告和审计状态：
-
-```sh
-./atm report todo.txt
-```
-
-只清理主文档生成状态块，保留审计产物：
-
-```sh
-./atm clean todo.txt
-```
-
-显式清理选定审计产物：
-
-```sh
-./atm clean todo.txt --reports --state --logs
-```
-
-复制任务块后修复重复的生成 report id：
-
-```sh
-./atm repair-ids todo.txt
-```
-
-只预览执行计划，不运行 bash 或所选工具：
-
-```sh
-./atm plan todo.txt
-```
-
-显式预览 lazy bash provider 的值：
-
-```sh
-./atm plan --preview todo.txt
-```
-
-写出适合浏览器查看的 HTML 流程图：
-
-```sh
-./atm plan -file todo.txt -html plan.html
-```
-
-用默认浏览器打开流程图：
-
-```sh
-./atm plan -file todo.txt -open
-```
-
-如果需要给其他工具读取，可以输出 JSON：
-
-```sh
-./atm plan -json -file todo.txt
-```
+| 命令 | 用途 |
+| --- | --- |
+| `./atm check todo.md` | 校验 ATM 文件，不执行任务。 |
+| `./atm check --plan todo.md` | 输出 dry-run 执行计划。 |
+| `./atm check --plan --preview todo.md` | 在计划中包含可预览的 lazy provider 值。 |
+| `./atm check --open todo.md` | 在浏览器中打开临时计划流程图。 |
+| `./atm check --plan todo.md --html plan.html` | 把同一个流程图写入文件。 |
+| `./atm append todo.md 'Review README.'` | 向源文件或 active run 追加格式化任务。 |
+| `./atm format todo.md` | 规范化任务头和生成状态布局。 |
+| `./atm report` | 汇总当前项目最近一次运行。 |
+| `./atm clean result.todo.md` | 移除生成状态块，保留审计产物。 |
+| `./atm clean --repair-ids result.todo.md` | 修复重复的生成 report id。 |
 
 ## 更多
 
-- 完整命令参考：[docs/commands.zh-CN.md](docs/commands.zh-CN.md)
-- 可直接改的示例：[快速开始](examples/quick-start.zh-CN.todo.md)、[简单](examples/simple.zh-CN.todo.md)、[复杂](examples/complex.zh-CN.todo.md)
-- 设计说明：[docs/design.zh-CN.md](docs/design.zh-CN.md)
+- 用户手册：[docs/zh/user/README.md](docs/zh/user/README.md)
+- CLI 手册：[docs/zh/user/reference/cli.md](docs/zh/user/reference/cli.md)
+- 命令参考：[docs/zh/commands.md](docs/zh/commands.md)
+- 可直接修改的示例：[快速开始](examples/zh/quick-start.todo.md)、[简单](examples/zh/simple.todo.md)、[复杂](examples/zh/complex.todo.md)
+- 设计说明：[docs/zh/design.md](docs/zh/design.md)
 - 安全政策：[SECURITY.md](SECURITY.md)
-
-`atm` 使用 Go 编写，支持 Linux、macOS 和 Windows。
 
 ## 许可证
 

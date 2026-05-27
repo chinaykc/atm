@@ -2,253 +2,271 @@
 
 [中文文档](README.zh-CN.md)
 
-**ATM** means **Agent Task Markdown**: a Markdown-based DSL (domain-specific language) for scheduling and coordinating agent tasks.
+<p align="center">
+  <img src="docs/assets/atm-logo-usd.svg" alt="ATM" width="420">
+</p>
 
-Use it when you have a few coding-agent jobs and want them to run in a clear order without setting up a database, daemon, web UI, or workflow system. Write prompts and slash commands in a Markdown or plain-text task file, preview the execution plan with `atm plan`, and let `atm` mark finished work in the same file.
+**ATM** stands for **Agent Task Markdown**: a Markdown runbook format for coding agents.
 
-For a guided manual with examples and diagrams, see [docs/user/README.md](docs/user/README.md).
+It is for the space between one-off prompts and full workflow systems. When a project needs several agent tasks, such as running checks, reviewing docs, validating examples, and applying fixes, a chat thread quickly becomes hard to audit and repeat. ATM lets you write that work down as a readable `todo.md`: project context stays as normal Markdown, and a small set of slash commands describes how the work should run.
+
+ATM turns the file into an agent execution plan. Tasks can run in order, retry until a condition passes, branch into parallel checks, wait for each other, and produce structured results. You can preview the plan before any agent starts, run it through Codex or Claude Code, and reuse workflows as local commands or HTTP APIs.
+
+## When To Use It
+
+- Ask AI to draft and refine ATM files, then let the workflow evolve with the project instead of living only in chat history.
+- Turn repeated prompt work into reusable runbooks, so agents can spend more time executing and less time being re-instructed.
+- Try different collaboration patterns, from sequential review to parallel checks and multi-agent style handoffs, without building a workflow service first.
+- Capture complex project procedures as Markdown that both humans and agents can read, review, run, and improve.
+- Expose recurring workflows as local commands or small HTTP APIs when they become part of everyday project operations.
+
+## Requirements
+
+- Codex on `PATH` for the default runner, or Claude Code on `PATH` when using `--tool claude`.
+- Linux, macOS, or Windows.
+- Go 1.25 or newer only when building from source.
+
+If a runner is not on `PATH`, pass its executable path with `--codex /path/to/codex` or `--claude /path/to/claude`.
+
+## Install
+
+Download the archive for your platform from GitHub Releases, unzip it, and put the `atm` binary on `PATH`.
+
+Check the installed binary:
+
+```sh
+atm --version
+```
+
+To build from source instead:
+
+```sh
+go build -o atm ./cmd/atm
+```
 
 ## Quick Start
 
-Build the CLI:
-
-```sh
-go build -buildvcs=false -o atm ./cmd/atm
-```
-
-Create `todo.txt`:
+Create `todo.md`:
 
 ```txt
-Run the test suite and fix any failures.
-
 /for 3 until tests pass
-Make the repository ready for release.
+Run the project test suite and fix any failures.
 
 /go
-Review the README for unclear setup steps.
+Check the setup documentation for steps that are missing, stale, or unclear.
+Write findings to `checks/setup.md`.
+
+/go
+Check examples, scripts, and configuration files for commands that no longer work.
+Write findings to `checks/commands.md`.
 
 /wait
+
+/task
+Read `checks/setup.md` and `checks/commands.md`, then fix the confirmed project issues.
+```
+
+Preview the execution plan. `check` does not start an agent:
+
+```sh
+./atm check --plan todo.md
+```
+
+Open the plan flowchart in a browser:
+
+```sh
+./atm check --open todo.md
 ```
 
 Run it:
 
 ```sh
-./atm
+./atm run todo.md
 ```
 
-With no file argument, `atm` uses the first existing default file from `todo.txt`, `todo.md`, or `toto.md`.
-
-The explicit subcommand is equivalent:
+The default command is also `run`, so this is equivalent:
 
 ```sh
-./atm run -file todo.txt
+./atm todo.md
 ```
-
-`run` is the live collaboration mode: it keeps rescanning the active todo file, so tasks appended while the command is still running can be picked up by that same `run`. Use `exec` for one-shot snapshot execution:
-
-```sh
-./atm exec todo.txt
-```
-
-`exec` freezes the task block set at startup while keeping the same tool flags, output directory, state, and report behavior as `run`. Tasks appended later remain in the document but are left for a later `run` or `exec`.
 
 On Windows PowerShell:
 
 ```powershell
-.\atm.exe -file todo.txt
+.\atm.exe run todo.md
 ```
 
-By default, `atm` runs tasks through Codex:
+Select a runner explicitly:
 
 ```sh
-./atm -tool codex -file todo.txt
+./atm run --tool codex todo.md
+./atm run --tool claude todo.md
 ```
 
-To use Claude Code instead:
+`--tool claude-code` is also accepted. Multiple ATM files can be queued in one run:
 
 ```sh
-./atm -tool claude -file todo.txt
+./atm run --jobs 4 todo.md rollout.md followup.md
 ```
 
-`-tool claude-code` is also accepted. If the executable is not on `PATH`, pass `-codex /path/to/codex` or `-claude /path/to/claude`.
+## ATM File Format
 
-Multiple todo files can be queued in one run:
-
-```sh
-./atm run todo.txt rollout.md followup.md
-./atm run -file todo.txt -file rollout.md
-```
-
-## Common Uses
-
-- Run a release checklist from top to bottom.
-- Ask the selected tool to keep trying until a condition passes with `/for 3 until tests pass`.
-- Start independent reviews with `/go`, then join them with `/wait`.
-- Preview execution order without running anything with `atm plan`.
-- Keep task state in a file you can edit, review, commit, or throw away.
-
-## Todo Format
-
-ATM supports plain text task files and Markdown task documents. In Markdown, headings are context and scope, not executable task declarations. A task starts at `/task`, a task-start control command such as `/for`, `/go`, `/call`, `/bash`, `/wait`, `/if`, or `/else`, or a task header command such as `/let`, `/args`, `/cd`, `/output`, `/db use`, `/skill use`, or `/mcp use` followed by prompt text. Use `/task` when the task has no header/control command and is just ordinary prompt text.
-
-Ordinary Markdown before a task is preserved in the file and provided as context to tasks in that section. Prompt text starts after the task header; slash commands inside prompt text are rejected unless they start a new root-level task after a blank line.
-
-Use `/context #Heading` in a Markdown task header to add ordinary documentation from another section to the task context. Use `/doc text` or `/doc` followed by a fenced block for human-only notes that stay out of agent context.
-
-Whole-line comments are ignored in legacy text task blocks: lines whose first non-space character is `#`, HTML comment blocks such as `<!-- ... -->`, and Markdown reference comments such as `[//]: # (...)`. Standalone Markdown rule lines made only of three or more `-` or `=` characters are ignored in runnable content.
-
-```txt
-First prompt sent to the selected tool.
-
-/for 2
-Run this prompt twice.
-
-/resume /for 3
-Continue the previous tool session.
-```
-
-Markdown task document example:
+In Markdown ATM files, headings provide context and scope. They do not start tasks by themselves. Executable work starts at `/task`, a control command such as `/for`, `/go`, `/wait`, `/if`, or `/else`, or a task header command followed by prompt text.
 
 ```md
-# Release notes
+# Project context
 
-This is documentation and is not executed.
+This ordinary Markdown is context for tasks in this section.
 
-## Verify
+## Documentation
 
-/for 2
-Run go test ./... and fix failures.
-
-/task
-Run go vet ./... and fix actionable findings.
-
-## discuss
-
-/task
-This whole section is one prompt.
-
-Blank lines stay inside the prompt.
+/task docs
+Review the docs with the section context above.
 ```
 
-Commands go at the top of a block, before the prompt text. The supported commands are:
+Task command quick reference:
 
-- `/resume`: continue the selected tool's most recent session.
-- `/args ...`: append CLI arguments to the selected tool, for example `/args --yolo`.
-- `/cd path`: prepare and enter a task workspace; missing directories are created by default. Use `/cd --must-exist path` to require an existing directory.
-- `/let name value`: define a template variable; standalone `/let` blocks are visible to later tasks in the current Markdown scope.
-- `/let name /bash script`: define a lazy variable from bash stdout; it runs only when the variable is rendered or read.
-- `/let name /call def [args...]`: lazily call a reusable definition and bind its return value.
-- `/bash script`: run a bash script before the prompt; heredoc form is supported for multi-line scripts.
-- `/context #Heading`: add another Markdown section's ordinary documentation to the current task context.
-- `/doc text` or `/doc` plus a fenced block: keep human-only notes out of agent context.
-- `/output [file]`: require structured JSON through a temporary MCP tool and save it as an output artifact.
-- `/db new/use/access/ignore ...`: declare task databases and control per-block MCP access.
-- `/skill new/use/ignore ...`: declare local skills in the current Markdown scope and mount selected skills into a `/cd` workdir.
-- `/mcp new/use/ignore ...` and `/mcp def use ...`: declare scoped temporary MCP servers and expose selected definitions as MCP tools.
-- `/def name [params...]` plus `/return`: define reusable task templates.
-- `/call name [args...]`: execute a definition as a task/header command; use `/let name /call ...` before prompt text when the return value must be rendered.
-- `/return ...`: return text, bash output, or a multiline template from a definition.
-- `/import [namespace from] path`: import definitions from another todo file.
-- `/pool name max [buffer]`: declare a named background worker pool.
-- `/for 3 [until condition]`: run up to `3` times; `{{n}}` renders as the zero-based loop index (`0`, `1`, `2`).
-- `/for until(expr)`: run until a local expression is true. Parenthesized `until(...)` is deterministic local control flow; plain-language `until condition` still uses the tool-backed MCP check.
-- `/if (expr)` or `/if natural language`: choose one branch with local expression or the MCP check tool; `/if` and `/else` do not nest.
-- `/for name in files()`, `/for name in walkFiles("src")`, `/for name in dirs()`, or `/for name in [a b]`: run once per file, directory, or listed value. File and directory traversal is only expressed through the `files()`, `dirs()`, `walkFiles()`, and `walkDirs()` expression helpers; legacy `/for file`, `/for dir`, and `/for path` headers are invalid.
-- `/go [pool]`: start this task in the background, optionally in a named pool.
-- `/wait [pool]`: wait for earlier `/go` tasks, optionally only one named pool.
+| Command | Use |
+| --- | --- |
+| `/task [name]` | Start a prompt task and optionally name its agent session. |
+| `/resume name` | Continue a named session from an earlier task. |
+| `/fork name` | Fork a named session and run the current task from that history. |
+| `/args ...` | Append CLI arguments to the selected runner for this task. |
+| `/cd path` | Prepare and enter a task workspace. |
+| `/let name value` | Define a template variable, or a lazy value from `/bash` or `/call`. |
+| `/bash script` | Run a shell script before the prompt. |
+| `/output [file]` | Save task output; with a schema fence, require structured JSON. |
+| `/db ...` | Attach a local JSON task database as memory or a blackboard. |
+| `/skill ...` | Declare or mount local skills for the task workspace. |
+| `/mcp ...` | Declare MCP servers, expose definitions, or grant task access to MCP tools. |
+| `/webhook ...` | Declare webhook targets or send webhook notifications. |
+| `/def` + `/call` | Define and reuse task templates. |
+| `/return ...` | Return text, bash output, or a multiline template from a definition. |
+| `/import ...` | Import definitions from another ATM file. |
+| `/pool name max [buffer]` | Declare a named background worker pool. |
+| `/if condition` | Choose a branch with a local expression or structured check. |
+| `/else` | Provide the alternate branch for `/if`. |
+| `/for ...` | Retry, loop, or iterate over files, directories, ranges, or lists. |
+| `/go [pool]` | Start a task in the background. |
+| `/wait [pool]` | Wait for earlier background tasks. |
+| `/flag ...` | Declare parameters for `atm run`, dynamic commands, and `serve` APIs. |
+| `/context #Heading` | Add another Markdown section's ordinary documentation to task context. |
+| `/doc ...` | Keep human-only notes out of agent context. |
 
-Prompts, `/bash` scripts, `until` conditions, `/args` values, and `/cd` paths are rendered with Go `text/template`. Placeholders like `{{n}}`, `{{file}}`, and `{{branch}}` are available when those variables are in scope. New templates can also use `{{.n}}`, `{{index .Vars "file"}}`, `{{var "file"}}`, and control actions such as `{{if .n}}...{{end}}`.
+For the complete format, see the [user manual](docs/en/user/README.md) and [command reference](docs/en/commands.md).
 
-For `until`, `atm` attaches a structured temporary MCP check tool named `atm_report_check`; the check agent must report through that tool. Finished and running state is written as a generated Markdown quote block starting with `> [!ATM]`. Codex and Claude output is read from structured streams, so the console can show the current task line range, tool call names, and assistant messages while the run is active. The most recent assistant message is also shown in the quote block by default.
+## Reuse Workflows
 
-`/db` attaches a temporary MCP server for task databases. Use `scope` to control which task blocks see a database, `persist` to choose run-local or project-local storage, and `access` to grant read, append, write, or delete capability per task block.
+Any ATM file can be run directly, registered as a project-local command, or exposed through `serve`. Add `/flag` when the reused workflow should accept CLI or API parameters.
 
-Background branches run under a global concurrency limit. It defaults to `NumCPU` and can be changed with `-jobs N`. Named `/pool` declarations add per-pool limits while still sharing that global limit.
+```md
+/flag string area project area to review
+/flag bool fix apply safe fixes default:false
 
-Each run also writes artifacts under `.atm/YYYYMMDDHHMMSS[-N]` by default. Use `-output DIR` or `-o DIR` to choose a directory. Artifacts include per-run native agent JSONL event streams, run-local DB files under `db/`, and `result.md`, a copy of the final todo document before generated state is removed with `clean` or `untag`.
+/task
+Review {{area}}. If {{fix}} is true, apply safe fixes.
+```
+
+Register it as a local command:
+
+```sh
+./atm flag register workflows/review.md --name review
+./atm review -area docs -fix
+```
+
+Serve an ATM file as an HTTP API:
+
+```sh
+./atm serve workflows/review.md --addr 127.0.0.1:8080
+```
+
+For reusable project APIs, register routes:
+
+```sh
+./atm serve register workflows/review.md --path /review
+./atm serve --addr 127.0.0.1:8080
+```
+
+`GET /review` runs synchronously. `POST /review` creates an async job, and `GET /jobs/{id}` reads job state. `GET /openapi.json` returns generated OpenAPI metadata.
+
+## Results
+
+`atm run` works from a managed live copy and restores the original source file when the run exits.
+
+| Item | Default location |
+| --- | --- |
+| Run workspace | `~/.atm/runs/<run-id>/` |
+| Result document | `~/.atm/runs/<run-id>/result.todo.md` |
+| Task reports, logs, events, and outputs | `~/.atm/runs/<run-id>/tasks/<task-id>/` |
+| Project-local dynamic command artifacts | `.atm/commands/<command>/<timestamp>/` |
+| Project-local API artifacts | `.atm/api/runs/...` and `.atm/api/jobs/...` |
+
+Use `ATM_HOME` to choose a different ATM home. `--output DIR` or `-o DIR` redirects the shared output directory, but source backups, task directories, and `result.todo.md` remain in the managed run workspace.
+
+Unfinished runs can be continued with:
+
+```sh
+./atm resume <run-id>
+./atm resume --last
+```
+
+If a run is interrupted while a source file is hidden behind a placeholder, recover the latest saved source copy with:
+
+```sh
+./atm resume --restore-source
+```
+
+## How It Works
+
+ATM compiles the ATM file into a static plan before execution. `atm check --plan` prints that plan without running bash scripts or agents, so loops, branches, background work, pools, and task dependencies can be reviewed first.
+
+During `atm run`, ATM copies the source ATM file and imports into a managed run workspace, executes the live working copy, and restores the original source file when the run exits. Status blocks, reports, runner event streams, structured outputs, and logs are written under the run workspace for auditability.
+
+Natural-language checks such as `/for 3 until tests pass` are implemented as structured tool calls. After each attempt, ATM exposes a scoped MCP check tool to the runner, currently through a local loopback streamable HTTP endpoint by default, and asks the model to report whether the condition is satisfied with machine-readable fields rather than free-form prose. Local expression forms such as `/for until(expr)` skip the model and are evaluated deterministically.
+
+ATM uses scoped MCP tools for structured-output boundaries because modern coding agents are trained to use tools and MCP-style schemas reliably. Whenever ATM needs a structured decision or result, such as an `until` decision, schema-backed `/output`, or definition-backed helper output, it exposes a narrowly scoped local MCP endpoint and reads the tool result instead of scraping assistant text. Features such as `/db` and `/webhook` also use scoped tools where the agent needs controlled access to local state or external notifications.
 
 ## Handy Commands
 
-Append work while `atm` is still running. If the current run has already exited, run `atm` again to execute the appended task:
+CLI command quick reference:
 
-```sh
-./atm append -file todo.txt "Add focused tests for the parser."
-```
+| Command | Use |
+| --- | --- |
+| `atm --version` | Print the CLI version, commit, and build time when available. |
+| `atm run [files...]` | Run pending prompt blocks; also the default command. |
+| `atm resume ...` | Resume an unfinished managed run or restore saved source files; supports `--last` and `--restore-source`. |
+| `atm flag register/scan/unregister/list` | Manage ATM files registered as dynamic CLI commands. |
+| `atm append <file> [prompt...]` | Append a formatted task to a source file or active run. |
+| `atm check [files...]` | Validate ATM files without running agents. |
+| `atm report ...` | Summarize task reports and audit state. |
+| `atm clean ...` | Remove generated state/report blocks or audit artifacts. |
+| `atm format <file>` | Normalize task headers and generated state layout. |
+| `atm serve [file]` | Serve one ATM file as an HTTP API. |
+| `atm serve register/scan/unregister/list` | Manage registered API ATM files. |
 
-Format a todo file:
+Common examples:
 
-```sh
-./atm format -file todo.txt
-```
-
-Remove generated state blocks:
-
-```sh
-./atm untag -file todo.txt
-```
-
-Summarize current task reports and audit state:
-
-```sh
-./atm report todo.txt
-```
-
-Clean generated document state while keeping audit artifacts:
-
-```sh
-./atm clean todo.txt
-```
-
-Clean selected audit artifacts explicitly:
-
-```sh
-./atm clean todo.txt --reports --state --logs
-```
-
-Repair duplicate generated report ids after copying task blocks:
-
-```sh
-./atm repair-ids todo.txt
-```
-
-Preview the execution plan without running bash or the selected tool:
-
-```sh
-./atm plan todo.txt
-```
-
-Preview lazy bash provider values explicitly:
-
-```sh
-./atm plan --preview todo.txt
-```
-
-Write a browser-friendly HTML flowchart:
-
-```sh
-./atm plan -file todo.txt -html plan.html
-```
-
-Open the flowchart in the default browser:
-
-```sh
-./atm plan -file todo.txt -open
-```
-
-For tooling, render the same plan as JSON:
-
-```sh
-./atm plan -json -file todo.txt
-```
+| Command | Use |
+| --- | --- |
+| `./atm check todo.md` | Validate an ATM file without running it. |
+| `./atm check --plan todo.md` | Print a dry-run execution plan. |
+| `./atm check --plan --preview todo.md` | Include previewable lazy provider values in the plan. |
+| `./atm check --open todo.md` | Open a temporary plan flowchart in a browser. |
+| `./atm check --plan todo.md --html plan.html` | Write the same flowchart to a file. |
+| `./atm append todo.md 'Review README.'` | Append a formatted task to a source or active run. |
+| `./atm format todo.md` | Normalize task headers and generated state layout. |
+| `./atm report` | Summarize the latest run for the current project. |
+| `./atm clean result.todo.md` | Remove generated status blocks while keeping audit artifacts. |
+| `./atm clean --repair-ids result.todo.md` | Repair duplicate generated report ids. |
 
 ## More
 
-- Full command reference: [docs/commands.md](docs/commands.md)
-- Ready-to-edit examples: [quick start](examples/quick-start.todo.md), [simple](examples/simple.todo.md), and [complex](examples/complex.todo.md)
-- Design notes: [docs/design.md](docs/design.md)
+- User manual: [docs/en/user/README.md](docs/en/user/README.md)
+- CLI manual: [docs/en/user/reference/cli.md](docs/en/user/reference/cli.md)
+- Command reference: [docs/en/commands.md](docs/en/commands.md)
+- Ready-to-edit examples: [quick start](examples/en/quick-start.todo.md), [simple](examples/en/simple.todo.md), and [complex](examples/en/complex.todo.md)
+- Design notes: [docs/en/design.md](docs/en/design.md)
 - Security policy: [SECURITY.md](SECURITY.md)
-
-`atm` is written in Go, and supports Linux, macOS, and Windows.
 
 ## License
 
