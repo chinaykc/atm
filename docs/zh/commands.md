@@ -769,7 +769,7 @@ SH
 /wait
 ```
 
-没有 prompt 的 `/wait` 是纯 join。有 prompt 的 `/wait` 是 wait coordinator task：ATM 会在匹配的后台任务可能仍在运行时启动该 prompt，并附加协调上下文，包括等待范围、待等待 task block、pool 名称、当前可见 ATM report/status、日志路径和当前取消能力。当前 runtime 会明确说明取消能力不可用；协调 agent 仍应指出何时应该取消。随后 ATM 等这些后台任务完成，再把 wait task 标记为完成。
+没有 prompt 的 `/wait` 是纯 join。有 prompt 的 `/wait` 会先等待匹配的后台任务完成，再执行这个 prompt，并附加少量 wait 结果上下文：等待范围、匹配后台任务 id、block、pool、最终状态、日志路径、错误和可见 report。
 
 ```txt
 /wait
@@ -795,7 +795,7 @@ atm check --plan todo.txt --preview
 
 需要在计划里看到 provider 实际值时，显式使用 `--preview`。Preview 模式可能执行 lazy `/let name /bash ...` provider，也可能执行不需要运行 agent 就能返回的纯 lazy `/let name /call ...` provider，并把结果写入文本或 JSON 输出；它仍不运行 agent、不写主文档 report、不更新 `.atm/state.json`。如果某个 lazy call provider 的 definition 需要运行期执行，preview 会把它列为未执行。
 
-使用 `-html FILE` 保存适合浏览器查看的流程图，或使用 `-open` 生成流程图并用默认浏览器打开。HTML 视图会展示 parent/child task 关系、WaitAgent 协调任务、显式 `/wait` 汇合和未汇合后台任务；它不会展示隐式最终等待。
+使用 `-html FILE` 保存适合浏览器查看的流程图，或使用 `-open` 生成流程图并用默认浏览器打开。HTML 视图会展示 parent/child task 关系、显式 `/wait` 汇合和未汇合后台任务；它不会展示隐式最终等待。
 
 ```sh
 atm check --plan todo.txt -html plan.html
@@ -812,7 +812,7 @@ JSON 格式作为面向工具的契约：
 
 - `source`、`document`、`globals`、`tasks`、`tasks[].block`、`tasks[].prompt` 和 `tasks[].flow` 是稳定字段。`document.title` 是存在时的第一个一级标题；`document.sections` 是嵌套 Markdown 章节树，包含标题行号、层级、标题文本和 path。
 - `tasks[].context` 汇总会 prepend 到 task prompt 的默认 Markdown 上下文。它只报告行数、字符数和预览，不重复输出完整上下文正文。
-- `tasks[].decision` 给出该 task 的计划动作和原因。它区分前台执行、`/go` 后台 dispatch、纯 `/wait` join、`/wait` 协调任务、条件执行、parent/child 依赖，以及分支 skipped/no-op 原因。
+- `tasks[].decision` 给出该 task 的计划动作和原因。它区分前台执行、`/go` 后台 dispatch、纯 `/wait` join、`/wait` 后执行 prompt 的任务、条件执行、parent/child 依赖，以及分支 skipped/no-op 原因。
 - `loops` 汇总每个 `/for` 节点，包含 task/block、变量名、可静态确定的 values/count、动态 source expression 或 call、`until` 条件和运行参数。静态循环会展示展开值；动态循环只展示来源，不执行它。
 - `conditions` 列出条件 task 的条件类型/文本和静态分支结果：true 执行 then，并在有 else 时跳过 else；false 跳过 then，并在有 else 时执行 else，否则 no-op。
 - `tasks[].variables` 列出 prompt 或 output 配置中出现的 `{{name}}` 引用。每项会标记来源为 `global-let`、`global-lazy-bash`、`task-let`、`task-lazy-bash`、`task-lazy-call`、`loop` 或 `unresolved`；能在不执行 provider 的情况下确定的字面值会直接给出。

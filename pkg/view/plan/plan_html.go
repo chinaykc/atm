@@ -159,7 +159,6 @@ type appTask struct {
 	Block       int         `json:"block"`
 	ParentBlock int         `json:"parentBlock,omitempty"`
 	ChildBlocks []int       `json:"childBlocks,omitempty"`
-	WaitAgent   bool        `json:"waitAgent,omitempty"`
 	Title       string      `json:"title"`
 	Prompt      string      `json:"prompt"`
 	Ops         []appOp     `json:"ops"`
@@ -340,7 +339,6 @@ func buildPlanAppData(plan compiler.Plan, content string) planAppData {
 			Block:       task.BlockIndex + 1,
 			ParentBlock: parentBlockNumber(task),
 			ChildBlocks: childTaskBlockNumbers(plan.Tasks, task.BlockIndex),
-			WaitAgent:   taskIsWaitAgent(task),
 			Title:       taskTitle(task),
 			Prompt:      strings.TrimSpace(task.Prompt),
 			Ops:         appOps(task),
@@ -387,20 +385,6 @@ func buildPlanAppData(plan compiler.Plan, content string) planAppData {
 }
 
 func appOps(task compiler.Task) []appOp {
-	if taskIsWaitAgent(task) {
-		ops := ir.FlattenTaskFlow(task)
-		label := "WaitAgent"
-		detail := "WaitAgent"
-		pool := ""
-		if len(ops) > 0 && ops[0].Kind == compiler.FlatOpWait {
-			pool = ops[0].Pool
-			if pool != "" {
-				label += "(" + pool + ")"
-				detail += "(" + pool + ")"
-			}
-		}
-		return []appOp{{Kind: "waitagent", Label: label, Detail: detail, Pool: pool}}
-	}
 	var out []appOp
 	for _, op := range ir.FlattenTaskFlow(task) {
 		item := appOp{Kind: string(op.Kind), Label: displayPlanOp(op), Detail: formatPlanOp(op)}
@@ -436,10 +420,6 @@ func parentBlockNumber(task compiler.Task) int {
 		return task.ParentIndex + 1
 	}
 	return 0
-}
-
-func taskIsWaitAgent(task compiler.Task) bool {
-	return strings.TrimSpace(task.Prompt) != "" && taskHasWait(task) && len(formatWaitAgentFlow(task.Flow)) == 1
 }
 
 func fanoutLabels(task compiler.Task) []string {
@@ -555,9 +535,6 @@ func appBlockFlowNode(view planHTMLView, block int) (appFlowNode, bool) {
 			kind = "wait"
 		}
 		label := fmt.Sprintf("Task %d", ref.Number)
-		if taskIsWaitAgent(task) {
-			label = fmt.Sprintf("WaitAgent %d", ref.Number)
-		}
 		detail := taskTitle(task)
 		if task.HasParent {
 			detail += fmt.Sprintf(" · child of block %d", task.ParentIndex+1)
@@ -1964,7 +1941,6 @@ func planAppJS() string {
     const bits = [];
     if (task.parentBlock) bits.push(el("div", { class: "trace-row" }, el("span", { class: "muted", text: t("Parent", "父任务") }), link("block " + task.parentBlock, "block-" + task.parentBlock, "trace-pill")));
     if (task.childBlocks && task.childBlocks.length) bits.push(el("div", { class: "trace-row" }, el("span", { class: "muted", text: t("Child blocks", "子任务块") }), task.childBlocks.map((b) => link("block " + b, "block-" + b, "trace-pill"))));
-    if (task.waitAgent) bits.push(el("div", { class: "trace-row" }, el("span", { class: "muted", text: "WaitAgent" }), el("span", { class: "trace-pill", text: t("coordinates matching background work", "协调匹配的后台任务") })));
     if (task.variables && task.variables.length) bits.push(el("div", { class: "trace-row" }, el("span", { class: "muted", text: t("Variables", "变量") }), task.variables.map((v) => v.target ? link("{{" + v.name + "}}", v.target, "trace-pill " + (v.kind === "global" ? "" : "local")) : el("span", { class: "trace-pill unresolved", text: "{{" + v.name + "}}" }))));
     if (task.calls && task.calls.length) bits.push(el("div", { class: "trace-row" }, el("span", { class: "muted", text: t("Calls", "调用") }), task.calls.map((c) => link(c.label, c.target))));
     return bits;

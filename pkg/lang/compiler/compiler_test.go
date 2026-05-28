@@ -1357,15 +1357,15 @@ func TestMarkdownMCPIsOnlyVisibleAfterDeclaration(t *testing.T) {
 	}
 }
 
-func TestWaitWithPromptFormatsAsWaitAgent(t *testing.T) {
+func TestWaitWithPromptFormatsAsWaitThenExecute(t *testing.T) {
 	plan, err := CompileProgram("todo.txt", "/go\nReview.\n\n/wait\nSummarize tester findings.\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(plan.Tasks) != 2 {
-		t.Fatalf("expected go task plus wait agent task, got %#v", plan.Tasks)
+		t.Fatalf("expected go task plus wait prompt task, got %#v", plan.Tasks)
 	}
-	if got := langformat.TaskFlow(plan.Tasks[1]); got != "WaitAgent" {
+	if got := langformat.TaskFlow(plan.Tasks[1]); got != "Wait -> Execute" {
 		t.Fatalf("unexpected /wait prompt flow: %s", got)
 	}
 }

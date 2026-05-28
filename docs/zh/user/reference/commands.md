@@ -351,7 +351,7 @@ ATM 会为每个授权目标提供一个 agent 可调用的通知工具。工具
 - 固定次数 `/for` 只绑定小写 `n`，并且从 `0` 开始计数；不会生成大写 `N`。
 - `/go` 会把后续 suffix 放入后台分支；推荐复杂控制流换行写，例如 `/for ...` 下一行 `/go reviewer`。
 - `/wait name` 只等待指定池此前提交的任务。
-- `/wait` 带 prompt 时是 wait coordinator task：prompt 会带上等待范围、待等待后台任务列表、当前可见 report/status、日志路径和取消能力说明，用来观察、汇总和报告后台任务结果。
+- `/wait` 带 prompt 时会先等待匹配后台任务完成，再执行 prompt；prompt 会带上等待范围、匹配后台任务 id、block、pool、最终状态、日志路径、错误和可见 report。
 - 没有显式 `/wait` 就不等待剩余后台任务；`atm check` 会用 warning 提示未等待的后台任务，但不把它当作 error。`atm run` 在没有前台任务后退出，未汇合的后台 block 可能保持 `running`。
 - `/output` 只能写在 task header 中，并且一个任务块最多一个；prompt 正文里的 `/output` 是错误。
 - `/db ignore` 不带参数时不能和同一任务块的 `/db use` 或 `/db access` 混用。

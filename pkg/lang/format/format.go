@@ -13,33 +13,7 @@ func BlockBody(body string) string {
 }
 
 func TaskFlow(task ir.Task) string {
-	if strings.TrimSpace(task.Prompt) != "" {
-		if parts := formatWaitAgentFlow(task.Flow); len(parts) > 0 {
-			return strings.Join(parts, " -> ")
-		}
-	}
 	return strings.Join(formatFlowNode(task.Flow), " -> ")
-}
-
-func formatWaitAgentFlow(node ir.FlowNode) []string {
-	if node.Kind != ir.FlowSeq {
-		return nil
-	}
-	var parts []string
-	for i := 0; i < len(node.Children); i++ {
-		child := node.Children[i]
-		if child.Kind == ir.FlowWait && i+1 < len(node.Children) && node.Children[i+1].Kind == ir.FlowExecute {
-			if child.Pool != "" {
-				parts = append(parts, fmt.Sprintf("WaitAgent(%s)", child.Pool))
-			} else {
-				parts = append(parts, "WaitAgent")
-			}
-			i++
-			continue
-		}
-		parts = append(parts, formatFlowNode(child)...)
-	}
-	return parts
 }
 
 func formatFlowNode(node ir.FlowNode) []string {

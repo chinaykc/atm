@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/chinaykc/atm/pkg/lang/compiler"
+	"sort"
 	"sync"
 )
 
@@ -129,10 +130,11 @@ func (g *asyncGroup) snapshotUpTo(maxID int, pool string) []asyncTaskSnapshot {
 			out = append(out, snapshot)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
-func (g *asyncGroup) waitUpTo(maxID int, pool string) error {
+func (g *asyncGroup) waitUpTo(maxID int, pool string) ([]asyncTaskSnapshot, error) {
 	g.mu.Lock()
 	tasks := make([]*asyncTask, 0, len(g.tasks))
 	for _, task := range g.tasks {
@@ -141,13 +143,27 @@ func (g *asyncGroup) waitUpTo(maxID int, pool string) error {
 		}
 	}
 	g.mu.Unlock()
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].id < tasks[j].id })
 
 	var firstErr error
+	snapshots := make([]asyncTaskSnapshot, 0, len(tasks))
 	for _, task := range tasks {
 		<-task.done
-		if task.err != nil && firstErr == nil {
-			firstErr = task.err
+		snapshot := asyncTaskSnapshot{
+			ID:      task.id,
+			Block:   task.key.index + 1,
+			Pool:    task.pool,
+			LogPath: task.logPath,
+			Status:  "done",
 		}
+		if task.err != nil {
+			snapshot.Status = "failed"
+			snapshot.Error = task.err.Error()
+			if firstErr == nil {
+				firstErr = task.err
+			}
+		}
+		snapshots = append(snapshots, snapshot)
 	}
 
 	g.mu.Lock()
@@ -156,7 +172,7 @@ func (g *asyncGroup) waitUpTo(maxID int, pool string) error {
 		delete(g.pending, task.key)
 	}
 	g.mu.Unlock()
-	return firstErr
+	return snapshots, firstErr
 }
 
 type poolManager struct {

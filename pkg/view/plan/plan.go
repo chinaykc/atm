@@ -289,7 +289,6 @@ type AsyncJoin struct {
 	WaitBlock int    `json:"waitBlock"`
 	Pool      string `json:"pool,omitempty"`
 	Fanout    string `json:"fanout,omitempty"`
-	WaitAgent bool   `json:"waitAgent,omitempty"`
 }
 
 type ProviderPreview struct {
@@ -894,7 +893,6 @@ func buildPlanAsyncSummary(plan compiler.Plan) Async {
 						WaitBlock: task.BlockIndex + 1,
 						Pool:      branch.pool,
 						Fanout:    branch.fanout,
-						WaitAgent: taskIsWaitAgent(task),
 					})
 				} else {
 					rest = append(rest, branch)
@@ -942,11 +940,7 @@ func writePlanAsyncText(stdout io.Writer, async Async) {
 		fmt.Fprintln(stdout)
 	}
 	for _, item := range async.Joins {
-		wait := "wait"
-		if item.WaitAgent {
-			wait = "wait-agent"
-		}
-		fmt.Fprintf(stdout, "- %s task %d block %d joins task %d block %d via %s", wait, item.WaitTask, item.WaitBlock, item.FromTask, item.FromBlock, formatPlanPool(item.Pool))
+		fmt.Fprintf(stdout, "- wait task %d block %d joins task %d block %d via %s", item.WaitTask, item.WaitBlock, item.FromTask, item.FromBlock, formatPlanPool(item.Pool))
 		if item.Fanout != "" {
 			fmt.Fprintf(stdout, ": %s", item.Fanout)
 		}
@@ -1200,9 +1194,9 @@ func buildTaskDecisionSummary(task compiler.Task, childBlocks []int) Decision {
 		Reason: "runnable task block with prompt or executable flow",
 	}
 	switch {
-	case taskIsWaitAgent(task):
-		decision.Action = "coordinate-wait"
-		decision.Reason = "/wait with prompt starts a coordinator task, then joins matching background work"
+	case strings.TrimSpace(task.Prompt) != "" && taskHasWait(task):
+		decision.Action = "wait-then-execute"
+		decision.Reason = "/wait joins matching background work before running the prompt with wait result context"
 	case strings.TrimSpace(task.Prompt) == "" && taskHasWait(task):
 		decision.Action = "wait"
 		decision.Reason = "/wait without prompt only joins matching background work; no agent prompt is sent"
@@ -1376,27 +1370,6 @@ func groupPoolDecls(pools []compiler.PoolDecl) []poolDeclGroup {
 		groups[len(groups)-1].pools = append(groups[len(groups)-1].pools, pool)
 	}
 	return groups
-}
-
-func formatWaitAgentFlow(node compiler.FlowNode) []string {
-	if node.Kind != compiler.FlowSeq {
-		return nil
-	}
-	var parts []string
-	for i := 0; i < len(node.Children); i++ {
-		child := node.Children[i]
-		if child.Kind == compiler.FlowWait && i+1 < len(node.Children) && node.Children[i+1].Kind == compiler.FlowExecute {
-			if child.Pool != "" {
-				parts = append(parts, fmt.Sprintf("WaitAgent(%s)", child.Pool))
-			} else {
-				parts = append(parts, "WaitAgent")
-			}
-			i++
-			continue
-		}
-		parts = append(parts, formatFlowNode(child)...)
-	}
-	return parts
 }
 
 func formatFlowNode(node compiler.FlowNode) []string {

@@ -453,7 +453,7 @@ atm run release.md
 - `run` 使用 live/rescan 模式；执行期间如果需要影响当前运行，编辑 CLI 输出的 working file。
 - 全局 `/let` 保存服务名、分支、测试命令和审查策略，后续任务用模板引用，避免多个 prompt 中重复维护同一事实。
 - `/pool reviewer 4` 限制并行审查数量；`/for ... /go reviewer` 把目录和前端区域展开为后台分支。
-- 带 prompt 的 `/wait reviewer` 不是单纯阻塞，它会启动协调 agent 汇总后台分支、失败和取消建议。
+- 带 prompt 的 `/wait reviewer` 会先汇合后台分支，再把最终状态、错误、日志路径和可见 report 附加给汇总 prompt。
 - 跨模块修复放在 `/wait` 之后串行执行，避免多个 agent 同时修改共享文件。
 - 发布说明只使用已完成报告作为证据；如果前置验证失败，发布说明任务应该保留风险，而不是补写不存在的结果。
 

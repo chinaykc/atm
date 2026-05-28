@@ -34,6 +34,7 @@ type execContext struct {
 	options    compiler.RunOptions
 	defRef     definitionScopeRef
 	waitLimit  int
+	waitResult *waitResultContext
 	loopOp     int
 	loopRun    int
 	agent      string
@@ -41,6 +42,11 @@ type execContext struct {
 	background bool
 	poolPrefix string
 	callState  *callState
+}
+
+type waitResultContext struct {
+	Pool  string
+	Tasks []asyncTaskSnapshot
 }
 
 type definitionScopeRef struct {
@@ -454,7 +460,9 @@ func (x *taskExecution) executeFlow(ctx context.Context, current execContext, no
 		if limit == 0 {
 			limit = x.engine.async.currentMaxID()
 		}
-		if err := x.engine.async.waitUpTo(limit, pool); err != nil {
+		tasks, err := x.engine.async.waitUpTo(limit, pool)
+		current.waitResult = &waitResultContext{Pool: pool, Tasks: x.attachWaitReports(tasks)}
+		if err != nil {
 			return current, 0, false, err
 		}
 		return current, 0, false, nil
@@ -577,17 +585,31 @@ func (x *taskExecution) executeFlowSeq(ctx context.Context, current execContext,
 		if node.Kind == compiler.FlowWait && i+1 < len(nodes) && nodes[i+1].Kind == compiler.FlowExecute {
 			executeNode := nodes[i+1]
 			if strings.TrimSpace(x.executePromptText(executeNode.Prompt)) != "" {
-				next, runs, err := x.executeWaitAgent(ctx, current, node, executeNode, nextOffset)
+				next, runs, background, waitErr := x.executeFlow(ctx, current, node, nextOffset, allowGo)
 				total += runs
-				if err != nil {
-					return next, total, false, err
+				if background {
+					return next, total, true, waitErr
+				}
+				if waitErr != nil && next.waitResult == nil {
+					return next, total, false, waitErr
 				}
 				current = next
-				nextOffset += flowLinearOpCount(node) + flowLinearOpCount(executeNode)
-				i++
-				if x.returnSet {
-					return current, total, false, nil
+				nextOffset += flowLinearOpCount(node)
+
+				next, runs, background, err := x.executeFlow(ctx, current, executeNode, nextOffset, allowGo)
+				total += runs
+				if err != nil {
+					return next, total, background, err
 				}
+				if waitErr != nil {
+					return next, total, false, waitErr
+				}
+				current = next
+				i++
+				if background || x.returnSet {
+					return current, total, background, nil
+				}
+				nextOffset += flowLinearOpCount(executeNode)
 				continue
 			}
 		}
@@ -612,30 +634,7 @@ func (x *taskExecution) executePromptText(promptOverride string) string {
 	return x.task.Prompt
 }
 
-func (x *taskExecution) executeWaitAgent(ctx context.Context, current execContext, waitNode, executeNode compiler.FlowNode, opIndex int) (execContext, int, error) {
-	pool := resolvePool(current, waitNode.Pool)
-	if pool != "" {
-		if _, err := x.engine.pools.pool(pool); err != nil {
-			return current, 0, err
-		}
-	}
-	limit := current.waitLimit
-	if limit == 0 {
-		limit = x.engine.async.currentMaxID()
-	}
-	prompt := waitAgentPrompt(x.executePromptText(executeNode.Prompt), pool, x.waitAgentTaskSnapshots(limit, pool))
-	next, runs, err := x.executePrompt(ctx, current, executeNode.ExecuteOptions, prompt, opIndex+1)
-	if err != nil {
-		return next, runs, err
-	}
-	if err := x.engine.async.waitUpTo(limit, pool); err != nil {
-		return next, runs, err
-	}
-	return next, runs, nil
-}
-
-func (x *taskExecution) waitAgentTaskSnapshots(limit int, pool string) []asyncTaskSnapshot {
-	tasks := x.engine.async.snapshotUpTo(limit, pool)
+func (x *taskExecution) attachWaitReports(tasks []asyncTaskSnapshot) []asyncTaskSnapshot {
 	if len(tasks) == 0 {
 		return tasks
 	}
@@ -653,21 +652,24 @@ func (x *taskExecution) waitAgentTaskSnapshots(limit int, pool string) []asyncTa
 	return tasks
 }
 
-func waitAgentPrompt(prompt, pool string, tasks []asyncTaskSnapshot) string {
+func waitResultPrompt(prompt string, result *waitResultContext) string {
+	if result == nil {
+		return prompt
+	}
 	var b strings.Builder
-	b.WriteString("ATM wait coordination context.\n\n")
-	if pool == "" {
-		b.WriteString("Waiting for: all previously started background tasks.\n")
+	b.WriteString("ATM wait result context.\n\n")
+	if result.Pool == "" {
+		b.WriteString("Waited for: all previously started background tasks.\n")
 	} else {
-		b.WriteString("Waiting for pool: ")
-		b.WriteString(pool)
+		b.WriteString("Waited for pool: ")
+		b.WriteString(result.Pool)
 		b.WriteString(".\n")
 	}
-	if len(tasks) == 0 {
-		b.WriteString("Pending background tasks at coordination start: none.\n")
+	if len(result.Tasks) == 0 {
+		b.WriteString("Matched background tasks: none.\n")
 	} else {
-		b.WriteString("Pending background tasks at coordination start:\n")
-		for _, task := range tasks {
+		b.WriteString("Completed wait objects:\n")
+		for _, task := range result.Tasks {
 			b.WriteString("- async #")
 			b.WriteString(fmt.Sprint(task.ID))
 			b.WriteString(", block ")
@@ -701,8 +703,7 @@ func waitAgentPrompt(prompt, pool string, tasks []asyncTaskSnapshot) string {
 			}
 		}
 	}
-	b.WriteString("\nCancellation capability: not currently available in this runtime; report when cancellation would be appropriate.\n\n")
-	b.WriteString("Coordinate the wait: monitor the ATM file reports and logs if available, summarize completed, failed, cancelled, and follow-up work, and report clearly if intervention is needed.\n\n")
+	b.WriteString("\nPrompt:\n")
 	b.WriteString(prompt)
 	return b.String()
 }
@@ -1344,7 +1345,7 @@ func (x *taskExecution) callDefinition(ctx context.Context, current execContext,
 		}
 	}
 	for pool := range callAsyncPools {
-		if err := x.engine.async.waitUpTo(0, pool); err != nil {
+		if _, err := x.engine.async.waitUpTo(0, pool); err != nil {
 			return nil, false, err
 		}
 	}
@@ -1543,6 +1544,10 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 	}
 	if strings.TrimSpace(prompt) == "" {
 		return current, 0, nil
+	}
+	if current.waitResult != nil {
+		prompt = waitResultPrompt(prompt, current.waitResult)
+		current.waitResult = nil
 	}
 	start := time.Now()
 	agentDetail := ""

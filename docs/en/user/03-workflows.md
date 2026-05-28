@@ -112,14 +112,14 @@ Review docs/en/commands.md.
 Summarize both reviews.
 ```
 
-If `/wait` has prompt text, it is a coordinator task:
+If `/wait` has prompt text, ATM waits first, then runs that prompt with a small wait result context:
 
 ```txt
 /wait
 Watch both background reviews and summarize failures, risks, and manual follow-up.
 ```
 
-ATM gives the coordinator the wait scope, pending background task list, visible ATM reports/statuses, log paths, and cancellation capability information. It then waits for the background work and writes the `/wait` result.
+ATM gives the prompt the wait scope plus the matched background task ids, block numbers, pool names, final statuses, log paths, errors, and visible reports.
 
 Background work is joined only by explicit `/wait`. When no foreground work remains, unmatched background branches may stay marked `running`.
 

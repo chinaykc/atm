@@ -84,6 +84,37 @@ func (r *failingRunner) Check(ctx context.Context, todoPath, prompt, condition s
 	return false, fmt.Errorf("simulated check failure")
 }
 
+type promptFailRunner struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *promptFailRunner) Name() string {
+	return "prompt-fail"
+}
+
+func (r *promptFailRunner) Execute(ctx context.Context, todoPath, prompt string, opts compiler.RunOptions, stdout, stderr io.Writer) (agent.ExecuteResult, error) {
+	r.mu.Lock()
+	r.events = append(r.events, "start:"+strings.TrimSpace(prompt))
+	r.mu.Unlock()
+	if strings.Contains(prompt, "fail branch") {
+		return agent.ExecuteResult{}, fmt.Errorf("simulated branch failure")
+	}
+	return agent.ExecuteResult{Messages: []compiler.OutputMessage{{Tool: "prompt-fail", Role: "assistant", Text: "done"}}}, nil
+}
+
+func (r *promptFailRunner) Check(ctx context.Context, todoPath, prompt, condition string, opts compiler.RunOptions, stdout, stderr io.Writer) (bool, error) {
+	return true, nil
+}
+
+func (r *promptFailRunner) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
 type retryableRunner struct {
 	mu             sync.Mutex
 	executeCalls   int
@@ -946,17 +977,50 @@ func TestNamedWaitOnlyJoinsSelectedPool(t *testing.T) {
 		t.Fatalf("expected /wait fastpool not to wait slowpool, got:\n%s", events)
 	}
 	for _, want := range []string{
-		"Waiting for pool: fastpool.",
-		"block 4, pool fastpool, status",
+		"Waited for pool: fastpool.",
+		"Completed wait objects:",
+		"block 4, pool fastpool, status done",
 		"task-004-",
-		"Cancellation capability: not currently available",
 	} {
 		if !strings.Contains(events, want) {
 			t.Fatalf("expected wait prompt to contain %q, got:\n%s", want, events)
 		}
 	}
 	if !strings.Contains(events, "visible report:") {
-		t.Fatalf("expected wait prompt to receive coordination context, got:\n%s", events)
+		t.Fatalf("expected wait prompt to receive wait result context, got:\n%s", events)
+	}
+}
+
+func TestWaitWithPromptRunsAfterFailedBackgroundBranch(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	body := strings.Join([]string{
+		"/go",
+		"fail branch",
+		"",
+		"/wait",
+		"Summarize failures.",
+		"",
+	}, "\n")
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &promptFailRunner{}
+	err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out"), GlobalJobs: 2})
+	if err == nil || !strings.Contains(err.Error(), "simulated branch failure") {
+		t.Fatalf("expected wait failure after summary prompt, got %v", err)
+	}
+	events := strings.Join(runner.snapshot(), "\n")
+	for _, want := range []string{
+		"start:fail branch",
+		"ATM wait result context.",
+		"status failed",
+		"error: task 1 run failed: simulated branch failure",
+		"Prompt:\nSummarize failures.",
+	} {
+		if !strings.Contains(events, want) {
+			t.Fatalf("expected wait summary prompt to contain %q, got:\n%s", want, events)
+		}
 	}
 }
 

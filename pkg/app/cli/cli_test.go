@@ -1771,7 +1771,7 @@ func TestPlanSubcommandHTMLShowsStructureAndDocumentContent(t *testing.T) {
 		"Definitions",
 		"def-maker",
 		"Call(maker)",
-		"WaitAgent",
+		"Wait",
 		"parentBlock",
 		"childBlocks",
 		"Release Runbook",

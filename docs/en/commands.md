@@ -811,7 +811,7 @@ Standalone wait block:
 /wait
 ```
 
-`/wait` with no prompt is a pure join. `/wait` with prompt is a wait coordinator task: ATM starts the prompt while matching background work may still be running, gives it a coordination context with the wait scope, pending task block numbers, pool names, current visible ATM report/status, log paths, and the current cancellation capability. The current runtime reports cancellation as unavailable; the coordinator should still say when cancellation would be appropriate. ATM then waits for those tasks before marking the wait task done.
+`/wait` with no prompt is a pure join. `/wait` with prompt first joins matching background work, then runs the prompt with a small wait result context: wait scope, matched background task ids, block numbers, pool names, final statuses, log paths, errors, and visible reports.
 
 ```txt
 /wait
@@ -898,7 +898,7 @@ atm check --plan todo.txt --preview
 
 Use `--preview` when you explicitly want provider values in the plan. Preview mode may execute lazy `/let name /bash ...` providers and pure lazy `/let name /call ...` providers whose definitions can return without running an agent. It prints values in text or JSON output. It keeps agents, main-document reports, and `.atm/state.json` untouched. A lazy call provider whose definition needs runtime execution is listed as not executed.
 
-Use `-html FILE` to save a browser-friendly flowchart, or `-open` to generate one and open it in the default browser. The HTML view shows parent/child task links, WaitAgent coordinator tasks, explicit `/wait` joins, and unjoined background work separately; it does not display an implicit final wait.
+Use `-html FILE` to save a browser-friendly flowchart, or `-open` to generate one and open it in the default browser. The HTML view shows parent/child task links, explicit `/wait` joins, and unjoined background work separately; it does not display an implicit final wait.
 
 ```sh
 atm check --plan todo.txt -html plan.html
@@ -915,7 +915,7 @@ The JSON format is intended as a tool-facing contract:
 
 - `source`, `document`, `globals`, `tasks`, `tasks[].block`, `tasks[].prompt`, and `tasks[].flow` are stable fields. `document.title` is the first level-1 heading when present; `document.sections` is the nested Markdown section tree with heading line, level, title, and path.
 - `tasks[].context` summarizes default Markdown context that will be prepended to the task prompt. It reports line count, character count, and a preview rather than duplicating the full context text.
-- `tasks[].decision` gives the planned task action and reason. It distinguishes foreground execution, `/go` background dispatch, pure `/wait` joins, `/wait` coordinator tasks, conditional execution, parent/child dependencies, and skipped/no-op branch reasons.
+- `tasks[].decision` gives the planned task action and reason. It distinguishes foreground execution, `/go` background dispatch, pure `/wait` joins, `/wait`-then-prompt tasks, conditional execution, parent/child dependencies, and skipped/no-op branch reasons.
 - `loops` summarizes every `/for` node with task/block, variable name, static values/count when known, dynamic source expression or call, `until` condition, and run options. Static loops expose their values; dynamic loops expose the source without executing it.
 - `conditions` lists conditional tasks with their condition kind/text and the static branch outcome: true executes then and skips else when present; false skips then and either executes else or no-ops when no else branch exists.
 - `tasks[].variables` lists `{{name}}` references found in the prompt or output config. Each item marks the source as `global-let`, `global-lazy-bash`, `task-let`, `task-lazy-bash`, `task-lazy-call`, `loop`, or `unresolved`; literal values are included when known without executing a provider.

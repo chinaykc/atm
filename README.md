@@ -8,9 +8,51 @@
 
 **ATM** stands for **Agent Task Markdown**: a Markdown runbook format for coding agents.
 
-It is for the space between one-off prompts and full workflow systems. When a project needs several agent tasks, such as running checks, reviewing docs, validating examples, and applying fixes, a chat thread quickly becomes hard to audit and repeat. ATM lets you write that work down as a readable `todo.md`: project context stays as normal Markdown, and a small set of slash commands describes how the work should run.
+It can:
+
+- Set expectations and let an agent iterate:
+
+Create `fix.md`:
+
+```txt
+/for 3 until tests pass
+Run the project test suite and fix any failures.
+```
+
+Then run:
+
+```bash
+atm fix.md
+```
+
+You will see ATM start the same repair task up to 3 times. After each run, ATM asks the agent to report, through a structured check, whether “tests pass” is satisfied. If it passes, the loop stops early; otherwise ATM continues to the next attempt. The generated result document records each run status, keeps recent assistant messages, and stores detailed logs under the run directory.
+
+- Explore in parallel for larger work:
+
+Create `audit.md`:
+
+```txt
+/for dir in dirs()
+/go
+Audit the {{dir}} directory and write the report to ./report/{{dir}}.md.
+
+/wait
+Summarize ./report/*.md into report.md and list anything that still needs human review.
+```
+
+Then run:
+
+```bash
+atm audit.md
+```
+
+You will see ATM evaluate `dirs()` at runtime, start one background agent branch per top-level directory, then join those branches at `/wait` before running the summary prompt. The summary prompt receives a small wait result context, including each background branch's async id, block, pool, final status, log path, error, and visible report, so it can produce the final `report.md`.
+
+ATM defines a small syntax for the space between `one-off prompts` and `full workflow systems`. When a project needs several agent tasks, such as running checks, reviewing docs, validating examples, and applying fixes, a chat thread quickly becomes hard to audit and repeat. ATM lets you write that work down as a readable `todo.md`: project context stays as normal Markdown, and a small set of slash commands describes how the work should run.
 
 ATM turns the file into an agent execution plan. Tasks can run in order, retry until a condition passes, branch into parallel checks, wait for each other, and produce structured results. You can preview the plan before any agent starts, run it through Codex or Claude Code, and reuse workflows as local commands or HTTP APIs.
+
+[Task Command Quick Reference](#task-command-quick-reference) · [CLI Command Quick Reference](#cli-command-quick-reference)
 
 ## When To Use It
 
@@ -146,7 +188,7 @@ This ordinary Markdown is context for tasks in this section.
 Review the docs with the section context above.
 ```
 
-Task command quick reference:
+### Task Command Quick Reference
 
 | Command | Use |
 | --- | --- |
@@ -254,7 +296,7 @@ ATM uses scoped MCP tools for structured-output boundaries because modern coding
 
 ## Handy Commands
 
-CLI command quick reference:
+### CLI Command Quick Reference
 
 | Command | Use |
 | --- | --- |
