@@ -565,7 +565,7 @@ func (x *taskExecution) evaluateFlowIfCondition(ctx context.Context, current exe
 		if err := x.resolveSessionOptions(&renderedOptions); err != nil {
 			return false, err
 		}
-		return x.engine.runner.Check(ctx, x.engine.filePath, prompt, renderedCondition, renderedOptions, x.stdout, x.stderr)
+		return x.engine.checkAgent(ctx, x.engine.filePath, prompt, renderedCondition, renderedOptions, x.stdout, x.stderr)
 	}
 }
 
@@ -983,7 +983,7 @@ func (x *taskExecution) checkLoopCondition(ctx context.Context, current execCont
 		if err := x.resolveSessionOptions(&renderedOptions); err != nil {
 			return false, err
 		}
-		return x.engine.runner.Check(ctx, x.engine.filePath, prompt, condition, renderedOptions, x.stdout, x.stderr)
+		return x.engine.checkAgent(ctx, x.engine.filePath, prompt, condition, renderedOptions, x.stdout, x.stderr)
 	}
 }
 
@@ -1550,7 +1550,7 @@ func (x *taskExecution) executePrompt(ctx context.Context, current execContext, 
 		agentDetail = " [" + current.agent + "]"
 	}
 	writeATMEvent(x.stderr, "run", "task %d%s step %d via %s%s", x.task.BlockIndex+1, x.engine.taskLineRangeLabel(x.task.BlockIndex), runningOpIndex(current, opIndex)+1, x.engine.runner.Name(), agentDetail)
-	result, err := x.engine.runner.Execute(ctx, x.engine.filePath, prompt, renderedOptions, x.stdout, x.stderr)
+	result, err := x.engine.executeAgent(ctx, x.engine.filePath, prompt, renderedOptions, x.stdout, x.stderr)
 	if err != nil {
 		return current, 0, fmt.Errorf("task %d run failed: %w", x.task.BlockIndex+1, err)
 	}

@@ -84,6 +84,48 @@ func (r *failingRunner) Check(ctx context.Context, todoPath, prompt, condition s
 	return false, fmt.Errorf("simulated check failure")
 }
 
+type retryableRunner struct {
+	mu             sync.Mutex
+	executeCalls   int
+	checkCalls     int
+	failExecUntil  int
+	failCheckUntil int
+}
+
+func (r *retryableRunner) Name() string {
+	return "retryable"
+}
+
+func (r *retryableRunner) Execute(ctx context.Context, todoPath, prompt string, opts compiler.RunOptions, stdout, stderr io.Writer) (agent.ExecuteResult, error) {
+	r.mu.Lock()
+	r.executeCalls++
+	call := r.executeCalls
+	failUntil := r.failExecUntil
+	r.mu.Unlock()
+	if call <= failUntil {
+		return agent.ExecuteResult{}, agent.NewRetryableError("exceeded retry limit, last status: 429 Too Many Requests")
+	}
+	return agent.ExecuteResult{Messages: []compiler.OutputMessage{{Tool: "retryable", Role: "assistant", Text: "done"}}}, nil
+}
+
+func (r *retryableRunner) Check(ctx context.Context, todoPath, prompt, condition string, opts compiler.RunOptions, stdout, stderr io.Writer) (bool, error) {
+	r.mu.Lock()
+	r.checkCalls++
+	call := r.checkCalls
+	failUntil := r.failCheckUntil
+	r.mu.Unlock()
+	if call <= failUntil {
+		return false, agent.NewRetryableError("exceeded retry limit, last status: 429 Too Many Requests")
+	}
+	return true, nil
+}
+
+func (r *retryableRunner) counts() (execute, check int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.executeCalls, r.checkCalls
+}
+
 type deletingRunner struct{}
 
 func (r *deletingRunner) Name() string {
@@ -1698,6 +1740,63 @@ func TestRunFailureWritesFailedReportAndState(t *testing.T) {
 		if task.Status != "failed" || task.Runs != 0 || !strings.HasPrefix(task.RenderedPromptHash, "sha256:") || !strings.HasPrefix(task.PlanHash, "sha256:") {
 			t.Fatalf("unexpected failed task state: %#v\n%s", task, stateData)
 		}
+	}
+}
+
+func TestRunRetriesRetryableExecuteErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	if err := os.WriteFile(file, []byte("/task\nretry me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &retryableRunner{failExecUntil: 2}
+	var stderr strings.Builder
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: &stderr, OutputDir: filepath.Join(dir, "out"), AgentRetries: 3}); err != nil {
+		t.Fatal(err)
+	}
+	execute, _ := runner.counts()
+	if execute != 3 {
+		t.Fatalf("execute calls = %d, want 3", execute)
+	}
+	if got := stderr.String(); strings.Count(got, "[atm] retry") != 2 {
+		t.Fatalf("expected two retry events, got:\n%s", got)
+	}
+}
+
+func TestRunRetriesRetryableNaturalConditionCheckErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	if err := os.WriteFile(file, []byte("/for 3 until tests pass\nretry me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &retryableRunner{failCheckUntil: 1}
+	var stderr strings.Builder
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: &stderr, OutputDir: filepath.Join(dir, "out"), AgentRetries: 3}); err != nil {
+		t.Fatal(err)
+	}
+	execute, check := runner.counts()
+	if execute != 1 || check != 2 {
+		t.Fatalf("execute/check calls = %d/%d, want 1/2", execute, check)
+	}
+	if got := stderr.String(); !strings.Contains(got, "agent check failed with retryable error; retry 1/3") {
+		t.Fatalf("missing check retry event:\n%s", got)
+	}
+}
+
+func TestRunDoesNotRetryPastConfiguredRetryLimit(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.txt")
+	if err := os.WriteFile(file, []byte("/task\nretry me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &retryableRunner{failExecUntil: 2}
+	err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out"), AgentRetries: 1})
+	if err == nil || !strings.Contains(err.Error(), "Too Many Requests") {
+		t.Fatalf("expected retryable failure after limit, got %v", err)
+	}
+	execute, _ := runner.counts()
+	if execute != 2 {
+		t.Fatalf("execute calls = %d, want 2", execute)
 	}
 }
 

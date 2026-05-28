@@ -30,6 +30,7 @@ type Options struct {
 	Stdout       io.Writer
 	Stderr       io.Writer
 	MessageLimit int
+	AgentRetries int
 	OutputDir    string
 	TaskDir      string
 	GlobalJobs   int
@@ -69,6 +70,7 @@ type Engine struct {
 	callSeq    int
 	start      time.Time
 	messages   int
+	retries    int
 	abandoning bool
 	mu         sync.Mutex
 	stateMu    sync.Mutex
@@ -110,6 +112,9 @@ func New(opts Options) (*Engine, error) {
 	if opts.GlobalJobs <= 0 {
 		opts.GlobalJobs = runtime.NumCPU()
 	}
+	if opts.AgentRetries < 0 {
+		opts.AgentRetries = 0
+	}
 	outputs, err := newOutputRegistry(opts.OutputDir)
 	if err != nil {
 		return nil, err
@@ -145,6 +150,7 @@ func New(opts Options) (*Engine, error) {
 		bashVars:   make(map[string]string),
 		start:      time.Now(),
 		messages:   opts.MessageLimit,
+		retries:    opts.AgentRetries,
 	}, nil
 }
 
@@ -953,7 +959,7 @@ func (e *Engine) evaluateIfCondition(ctx context.Context, block compiler.IfBlock
 		if err != nil {
 			return false, fmt.Errorf("prompt template failed: %w", err)
 		}
-		return e.runner.Check(ctx, e.filePath, prompt, condition, compiler.RunOptions{}, e.stdout, e.stderr)
+		return e.checkAgent(ctx, e.filePath, prompt, condition, compiler.RunOptions{}, e.stdout, e.stderr)
 	}
 }
 

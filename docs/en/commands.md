@@ -1021,7 +1021,7 @@ atm run todo.txt
 
 Direct execution requires one or more positional ATM files.
 
-Use `-tool`, `-codex`, and `-claude` with either form. Use `-messages N` to choose how many recent structured assistant messages are kept per execution branch in each generated result block; the default is `1`. Use `-jobs N` to set the global maximum number of concurrently running background branches across all pools; by default it is `NumCPU`.
+Use `-tool`, `-codex`, and `-claude` with either form. Use `-messages N` to choose how many recent structured assistant messages are kept per execution branch in each generated result block; the default is `1`. Use `-retries N` to retry transient agent failures such as rate limits, timeouts, network errors, and 5xx responses; the default is `3`, and `0` disables these retries. Use `-jobs N` to set the global maximum number of concurrently running background branches across all pools; by default it is `NumCPU`.
 
 Multiple positional files are queued and executed in order:
 

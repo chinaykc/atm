@@ -145,6 +145,139 @@ func TestRunSubcommandExecutesPendingTasks(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandRetriesRetryableCodexErrorByDefault(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "todo.txt")
+	countFile := filepath.Join(dir, "count")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte("/task\nhello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+count=0
+if [ -f "$COUNT_FILE" ]; then
+  count=$(cat "$COUNT_FILE")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$COUNT_FILE"
+cat >/dev/null
+if [ "$count" -eq 1 ]; then
+  printf '{"type":"thread.started","thread_id":"thread_1"}\n'
+  printf '{"type":"turn.started"}\n'
+  printf '{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests"}}\n'
+  exit 1
+fi
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n'
+`
+	if err := os.WriteFile(codex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COUNT_FILE", countFile)
+
+	var out strings.Builder
+	if err := Run([]string{"run", file, "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	count, err := os.ReadFile(countFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "2" {
+		t.Fatalf("codex attempts = %s, want 2", count)
+	}
+	if !strings.Contains(out.String(), "[atm] retry") {
+		t.Fatalf("expected retry event in output:\n%s", out.String())
+	}
+}
+
+func TestRunSubcommandRetriesRetryableClaudeAPIRetryByDefault(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "todo.txt")
+	countFile := filepath.Join(dir, "count")
+	claude := filepath.Join(dir, "claude")
+	if err := os.WriteFile(file, []byte("/task\nhello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+count=0
+if [ -f "$COUNT_FILE" ]; then
+  count=$(cat "$COUNT_FILE")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$COUNT_FILE"
+if [ "$count" -eq 1 ]; then
+  printf '{"type":"system","subtype":"api_retry","error":"server_error","error_status":503,"attempt":1,"max_retries":5}\n'
+  printf '{"type":"result","subtype":"error","is_error":true,"result":"server_error status 503"}\n'
+  exit 1
+fi
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n'
+`
+	if err := os.WriteFile(claude, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COUNT_FILE", countFile)
+
+	var out strings.Builder
+	err := Run([]string{"run", file, "-tool", "claude", "-claude", claude, "-output", filepath.Join(dir, "out")}, &out, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := os.ReadFile(countFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "2" {
+		t.Fatalf("claude attempts = %s, want 2", count)
+	}
+	if !strings.Contains(out.String(), "[atm] retry") || !strings.Contains(out.String(), "api_retry server_error status 503") {
+		t.Fatalf("expected retry event in output:\n%s", out.String())
+	}
+}
+
+func TestRunSubcommandRetriesCanBeDisabled(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "todo.txt")
+	countFile := filepath.Join(dir, "count")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte("/task\nhello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+count=0
+if [ -f "$COUNT_FILE" ]; then
+  count=$(cat "$COUNT_FILE")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$COUNT_FILE"
+cat >/dev/null
+printf '{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests"}}\n'
+exit 1
+`
+	if err := os.WriteFile(codex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COUNT_FILE", countFile)
+
+	var out strings.Builder
+	err := Run([]string{"run", file, "-codex", codex, "-retries", "0", "-output", filepath.Join(dir, "out")}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "Too Many Requests") {
+		t.Fatalf("expected retryable codex error, got %v\n%s", err, out.String())
+	}
+	count, err := os.ReadFile(countFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "1" {
+		t.Fatalf("codex attempts = %s, want 1", count)
+	}
+}
+
 func TestRunSubcommandAppendToSourceDuringRunReachesActiveWorkFile(t *testing.T) {
 	requirePOSIXShell(t)
 

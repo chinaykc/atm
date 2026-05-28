@@ -50,6 +50,7 @@ atm run todo.txt
 | `-codex PATH` | `codex` | Codex 可执行文件 |
 | `-claude PATH` | `claude` | Claude Code 可执行文件 |
 | `-messages N` | `1` | 每个分支保留最近 N 条 assistant 消息 |
+| `-retries N` | `3` | 重试临时 agent 失败；`0` 关闭 |
 | `-output DIR` | `~/.atm/runs/<run-id>/outputs` | 输出产物目录 |
 | `-o DIR` | 同 `-output` | `-output` 简写 |
 | `-jobs N` | `NumCPU` | 所有池共享的全局后台并发上限 |

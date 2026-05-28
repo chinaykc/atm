@@ -918,7 +918,7 @@ atm run todo.txt
 
 直接执行必须传入一个或多个位置形式的 atm 文件。`atm run` 不会从当前目录自动发现 `todo.txt` 或 `todo.md`。
 
-两种形式都可以搭配 `-tool`、`-codex` 和 `-claude` 使用。用 `-messages N` 可以设置每个生成结果块中每个执行分支保留最近几条结构化 assistant 消息；默认是 `1`。用 `-jobs N` 可以设置所有池共享的全局后台分支并发上限；默认是 `NumCPU`。
+两种形式都可以搭配 `-tool`、`-codex` 和 `-claude` 使用。用 `-messages N` 可以设置每个生成结果块中每个执行分支保留最近几条结构化 assistant 消息；默认是 `1`。用 `-retries N` 可以重试限流、超时、网络错误和 5xx 响应等临时 agent 失败；默认是 `3`，设为 `0` 会关闭这类重试。用 `-jobs N` 可以设置所有池共享的全局后台分支并发上限；默认是 `NumCPU`。
 
 多个位置文件参数会按顺序排队执行：
 

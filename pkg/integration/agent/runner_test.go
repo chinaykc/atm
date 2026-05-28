@@ -771,6 +771,38 @@ func TestClaudeParserRendersSystemThinkingAndResultEvents(t *testing.T) {
 	}
 }
 
+func TestClaudeParserMarksAPIRetryAsCriticalError(t *testing.T) {
+	parser := newAgentEventParser("claude")
+
+	events, recognized := parser.consume(`{"type":"system","subtype":"api_retry","error":"rate_limit","error_status":429,"attempt":1,"max_retries":5,"session_id":"session_1"}`)
+	if !recognized || len(events) != 1 {
+		t.Fatalf("expected one api retry event, recognized=%v events=%#v", recognized, events)
+	}
+	if !strings.Contains(events[0].name, "api_retry rate_limit status 429 attempt 1/5") {
+		t.Fatalf("unexpected rendered event: %#v", events[0])
+	}
+	if parser.criticalError == "" || !isRetryableAgentMessage(parser.criticalError) {
+		t.Fatalf("expected retryable critical error, got %q", parser.criticalError)
+	}
+	_, recognized = parser.consume(`{"type":"result","subtype":"error","is_error":true}`)
+	if !recognized {
+		t.Fatal("expected recognized result event")
+	}
+	if !strings.Contains(parser.criticalError, "rate_limit") {
+		t.Fatalf("generic result error should not replace api retry cause, got %q", parser.criticalError)
+	}
+	if parser.sessionID != "session_1" {
+		t.Fatalf("expected claude session id, got %q", parser.sessionID)
+	}
+}
+
+func TestRetryableAgentMessageAllowsClaudeServerLimitingText(t *testing.T) {
+	message := "API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited"
+	if !isRetryableAgentMessage(message) {
+		t.Fatalf("expected server limiting message to be retryable")
+	}
+}
+
 func TestRunAgentCommandRendersCodexToolCallsAndMessages(t *testing.T) {
 	requireShell(t)
 
@@ -799,6 +831,52 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\
 	}
 	if !strings.Contains(result.raw, `"type":"tool_call"`) {
 		t.Fatalf("expected raw JSONL to be captured, got:\n%s", result.raw)
+	}
+}
+
+func TestRunAgentCommandMarksCodex429AsRetryable(t *testing.T) {
+	requireShell(t)
+
+	dir := t.TempDir()
+	fakeCodex := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+printf '{"type":"thread.started","thread_id":"thread_1"}\n'
+printf '{"type":"turn.started"}\n'
+printf '{"type":"error","message":"exceeded retry limit, last status: 429 Too Many Requests"}\n'
+printf '{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests"}}\n'
+exit 1
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runAgentCommand(exec.Command(fakeCodex), "codex", io.Discard, io.Discard)
+	if !IsRetryableError(err) {
+		t.Fatalf("expected retryable error, got %T %v", err, err)
+	}
+}
+
+func TestRunAgentCommandMarksClaudeAPIRetryAsRetryable(t *testing.T) {
+	requireShell(t)
+
+	dir := t.TempDir()
+	fakeClaude := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+printf '{"type":"system","subtype":"api_retry","error":"rate_limit","error_status":429,"attempt":1,"max_retries":5}\n'
+printf '{"type":"result","subtype":"error","is_error":true,"result":"Rate limit exceeded"}\n'
+exit 1
+`
+	if err := os.WriteFile(fakeClaude, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	_, err := runAgentCommand(exec.Command(fakeClaude), "claude", &stdout, io.Discard)
+	if !IsRetryableError(err) {
+		t.Fatalf("expected retryable error, got %T %v\n%s", err, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "api_retry rate_limit status 429") {
+		t.Fatalf("expected api retry event in output:\n%s", stdout.String())
 	}
 }
 

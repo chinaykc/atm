@@ -29,6 +29,7 @@ func executeFlags() []urfavecli.Flag {
 		&urfavecli.StringFlag{Name: "codex", Value: "codex", Usage: "codex executable path used by --tool codex"},
 		&urfavecli.StringFlag{Name: "claude", Value: "claude", Usage: "claude executable path used by --tool claude or --tool claude-code"},
 		&urfavecli.IntFlag{Name: "messages", Value: 1, Usage: "number of recent structured assistant messages to keep in each result block"},
+		&urfavecli.IntFlag{Name: "retries", Value: 3, Usage: "maximum retries for retryable agent errors; use 0 to disable"},
 		&urfavecli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "directory for output artifacts; source backups and result.todo.md stay under ATM_HOME/runs"},
 		&urfavecli.IntFlag{Name: "jobs", Usage: "maximum number of concurrently running background branches across all pools; defaults to NumCPU"},
 	}
@@ -136,6 +137,10 @@ func executeOptions(cmd *urfavecli.Command, env commandEnv) (engine.Options, err
 	if jobs < 0 {
 		return engine.Options{}, fmt.Errorf("--jobs must be at least 0")
 	}
+	retries := cmd.Int("retries")
+	if retries < 0 {
+		return engine.Options{}, fmt.Errorf("--retries must be at least 0")
+	}
 	return engine.Options{
 		ToolName:     cmd.String("tool"),
 		CodexPath:    cmd.String("codex"),
@@ -143,6 +148,7 @@ func executeOptions(cmd *urfavecli.Command, env commandEnv) (engine.Options, err
 		Stdout:       env.Stdout,
 		Stderr:       env.Stderr,
 		MessageLimit: messages,
+		AgentRetries: retries,
 		GlobalJobs:   jobs,
 	}, nil
 }

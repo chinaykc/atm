@@ -31,6 +31,7 @@ type agentEventParser struct {
 	tool              string
 	messages          []ir.OutputMessage
 	sessionID         string
+	criticalError     string
 	claudeFallback    string
 	displayedToolCall map[string]bool
 }
@@ -76,6 +77,9 @@ func runAgentCommand(cmd *exec.Cmd, tool string, stdout, stderr io.Writer) (agen
 	}
 	result := agentStreamResult{messages: parser.messages, raw: raw.String(), sessionID: parser.sessionID}
 	if waitErr != nil {
+		if isRetryableAgentMessage(parser.criticalError) {
+			return result, retryableError(parser.criticalError, waitErr)
+		}
 		return result, waitErr
 	}
 	if scanErr != nil {
@@ -131,9 +135,16 @@ func (p *agentEventParser) consumeCodex(event map[string]any) []agentDisplayEven
 		return []agentDisplayEvent{{tool: "codex", kind: "system", name: name}}
 	case "error":
 		if message := firstString(event, "message", "error"); message != "" {
+			p.criticalError = message
 			return []agentDisplayEvent{{tool: "codex", kind: "system", name: "error: " + message}}
 		}
 		return []agentDisplayEvent{{tool: "codex", kind: "system", name: "error"}}
+	case "turn.failed":
+		if message := firstString(mapField(event, "error"), "message", "error"); message != "" {
+			p.criticalError = message
+			return []agentDisplayEvent{{tool: "codex", kind: "system", name: "turn failed: " + message}}
+		}
+		return []agentDisplayEvent{{tool: "codex", kind: "system", name: "turn failed"}}
 	}
 	item := mapField(event, "item")
 	itemType := stringField(item, "type")
@@ -179,6 +190,12 @@ func (p *agentEventParser) consumeClaude(event map[string]any) []agentDisplayEve
 			subtype = "system"
 		}
 		name := subtype
+		if subtype == "api_retry" {
+			if message := claudeAPIRetryMessage(event); message != "" {
+				p.criticalError = message
+				name += " " + message
+			}
+		}
 		if model := stringField(event, "model"); model != "" {
 			name += " " + model
 		}
@@ -196,6 +213,7 @@ func (p *agentEventParser) consumeClaude(event map[string]any) []agentDisplayEve
 		}
 		if boolField(event, "is_error") {
 			name = "error"
+			p.rememberCriticalError(firstNonEmpty(p.claudeFallback, stringField(event, "subtype")))
 		}
 		if duration := intField(event, "duration_ms"); duration > 0 {
 			name += fmt.Sprintf(" in %.1fs", float64(duration)/1000)
@@ -207,6 +225,7 @@ func (p *agentEventParser) consumeClaude(event map[string]any) []agentDisplayEve
 	}
 	if eventType == "error" {
 		if message := firstString(event, "message", "error"); message != "" {
+			p.rememberCriticalError(message)
 			return []agentDisplayEvent{{tool: "claude", kind: "system", name: "error: " + message}}
 		}
 		return []agentDisplayEvent{{tool: "claude", kind: "system", name: "error"}}
@@ -319,6 +338,33 @@ func claudeATMMCPEvent(name string) (agentDisplayEvent, bool) {
 		}
 	}
 	return atmMCPDisplayEvent(server, tool)
+}
+
+func (p *agentEventParser) rememberCriticalError(message string) {
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+	if p.criticalError == "" || isRetryableAgentMessage(message) || !isRetryableAgentMessage(p.criticalError) {
+		p.criticalError = message
+	}
+}
+
+func claudeAPIRetryMessage(event map[string]any) string {
+	var parts []string
+	if category := stringField(event, "error"); category != "" {
+		parts = append(parts, category)
+	}
+	if status := intField(event, "error_status"); status > 0 {
+		parts = append(parts, fmt.Sprintf("status %d", status))
+	}
+	if attempt := intField(event, "attempt"); attempt > 0 {
+		if maxRetries := intField(event, "max_retries"); maxRetries > 0 {
+			parts = append(parts, fmt.Sprintf("attempt %d/%d", attempt, maxRetries))
+		} else {
+			parts = append(parts, fmt.Sprintf("attempt %d", attempt))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func atmMCPDisplayEvent(server, tool string) (agentDisplayEvent, bool) {

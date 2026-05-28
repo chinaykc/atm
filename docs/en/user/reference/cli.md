@@ -104,6 +104,7 @@ Common options:
 | `-codex PATH` | Codex executable |
 | `-claude PATH` | Claude executable |
 | `-jobs N` | Global background concurrency |
+| `-retries N` | Retry transient agent failures; default `3`, `0` disables |
 | `-output DIR`, `-o DIR` | Shared output artifact directory |
 
 Use `atm <command> -h` for command-specific flags.

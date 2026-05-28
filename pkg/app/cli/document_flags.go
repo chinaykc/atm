@@ -78,7 +78,7 @@ func flagLikelyTakesValue(arg string) bool {
 		return false
 	}
 	switch arg {
-	case "-tool", "--tool", "-codex", "--codex", "-claude", "--claude", "-messages", "--messages", "-output", "--output", "-o", "-jobs", "--jobs":
+	case "-tool", "--tool", "-codex", "--codex", "-claude", "--claude", "-messages", "--messages", "-retries", "--retries", "-output", "--output", "-o", "-jobs", "--jobs":
 		return true
 	default:
 		return false
