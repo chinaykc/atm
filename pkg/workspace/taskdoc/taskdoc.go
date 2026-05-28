@@ -251,6 +251,9 @@ func spaceTaskBlocks(blocks []document.Block) {
 		}
 	}
 	for i := 0; i+1 < len(blocks); i++ {
+		if strings.TrimSpace(blocks[i+1].Prefix) != "" {
+			continue
+		}
 		blocks[i].Sep = twoBlankLinesSeparator(blocks[i].Body)
 	}
 }

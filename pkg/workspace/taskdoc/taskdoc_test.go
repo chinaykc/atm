@@ -126,6 +126,21 @@ func TestFormatContentUsesTwoBlankLinesBetweenTasks(t *testing.T) {
 	}
 }
 
+func TestFormatContentDoesNotDuplicateGlobalSeparatorBeforeContext(t *testing.T) {
+	input := "/db new board scope:global persist:run access:admin\n\n\nShared context.\n\n\n/task\n\nUse it.\n"
+
+	formatted, count := FormatContent(input)
+	if count != 2 {
+		t.Fatalf("block count = %d, want 2", count)
+	}
+	if formatted != input {
+		t.Fatalf("formatted content = %q, want original", formatted)
+	}
+	if again, _ := FormatContent(formatted); again != formatted {
+		t.Fatalf("format is not idempotent:\n%s", again)
+	}
+}
+
 func normalizeTasksForSemanticCompare(tasks []compiler.Task) []compiler.Task {
 	out := make([]compiler.Task, len(tasks))
 	copy(out, tasks)
