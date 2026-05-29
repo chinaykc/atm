@@ -35,6 +35,37 @@ This page is the user-facing command quick reference. The full low-level syntax 
 | `/go [pool]` | Run the following task suffix in the background | Task start |
 | `/wait [pool]` | Wait for background tasks | Task start |
 
+### Runner Arguments And Model Configuration
+
+`/args ...` is a task-level runner argument pass-through. ATM does not parse model or upstream/provider settings. With `-tool codex`, the arguments are appended to `codex exec --json ... -`; with `-tool claude` or `-tool claude-code`, they are appended to `claude`.
+
+For complete execution order and caveats, see the [`/args` section in the low-level command reference](../../commands.md#args-).
+
+```txt
+/args --model gpt-5.5
+Run this task with a Codex model override.
+
+/args --model sonnet
+Run this task with a Claude Code model override.
+```
+
+Codex accepts config overrides as `-c key=value`. For a custom upstream, usually define `[model_providers.<id>]` in user-level `~/.codex/config.toml`, then select that provider from the task; for the built-in `openai` provider, use `openai_base_url`:
+
+```txt
+/args -c model_provider="proxy" --model gpt-5.5
+Run through a custom Codex provider.
+
+/args -c openai_base_url="https://gateway.example.com/v1" --model gpt-5.5
+Run through a selected OpenAI-compatible gateway.
+```
+
+Claude Code usually takes upstream routing, auth, and default model from environment variables or settings files, such as `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_API_KEY`. A task can pass `--settings`:
+
+```txt
+/args --settings ./.claude/atm-settings.json --model claude-sonnet-4-6
+Run through the gateway configured by Claude Code settings.
+```
+
 ## Templates
 
 ATM renders prompts, `/bash`, `/args`, `/cd`, `until`, `/return`, and `/output` schemas with Go `text/template`:

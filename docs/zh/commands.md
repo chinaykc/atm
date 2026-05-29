@@ -167,6 +167,58 @@ claude --resume <session-id> -p "提示词"
 用额外参数运行所选工具。
 ```
 
+ATM 不解析这些参数；它只把参数透传给当前 `atm run -tool` 选择的 runner。Codex 任务大致按 `codex exec --json ... <args> -` 执行，Claude Code 任务大致按 `claude ... <args> --output-format stream-json --verbose -p <prompt>` 执行。因此模型、推理强度、权限模式、profile 或上游服务都按对应 runner 的 CLI 和配置文件语义来写。
+
+常见模型配置：
+
+```txt
+/args --model gpt-5.5
+用 Codex 指定模型运行。
+
+/args --model sonnet
+用 Claude Code 指定模型运行。
+```
+
+Codex 的临时配置覆盖可以直接写成 `-c key=value`。如果要切到自定义上游，通常先在用户级 `~/.codex/config.toml` 定义 provider，再在任务里选择它；Codex 不允许项目级 `.codex/config.toml` 覆盖 provider/auth 这类机器本地配置。
+
+```toml
+# ~/.codex/config.toml
+[model_providers.proxy]
+name = "OpenAI-compatible proxy"
+base_url = "https://llm.example.com/v1"
+env_key = "PROXY_API_KEY"
+```
+
+```txt
+/args -c model_provider="proxy" --model gpt-5.5
+通过 Codex 的 proxy provider 运行这个任务。
+```
+
+如果只是覆盖 Codex 内置 `openai` provider 的 API base URL，也可以用 Codex 支持的 `openai_base_url` 配置，例如写在用户级 config，或对单个任务透传：
+
+```txt
+/args -c openai_base_url="https://gateway.example.com/v1" --model gpt-5.5
+通过指定 OpenAI 兼容网关运行。
+```
+
+Claude Code 的上游、鉴权和默认模型通常通过环境变量或 settings 文件配置。每个任务要临时切模型时用 `--model`；要临时加载 settings 时可以透传 `--settings`：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gateway.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "token-from-secret-store"
+  }
+}
+```
+
+```txt
+/args --settings ./.claude/atm-settings.json --model claude-sonnet-4-6
+通过 Claude Code settings 中的网关配置运行。
+```
+
+不要用 `/args` 覆盖 ATM 管理的 runner 参数，例如 Codex 的 `exec --json` 和最终 stdin `-`，或 Claude Code 的 `--output-format stream-json`、`--verbose`、`-p`；这些参数用于让 ATM 解析结构化输出和传入任务 prompt。
+
 `/args` 也可以和 `/for` 写在同一行：
 
 ```txt

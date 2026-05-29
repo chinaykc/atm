@@ -35,6 +35,37 @@
 | `/go [pool]` | 后台运行后续任务 suffix | 任务开头 |
 | `/wait [pool]` | 等待后台任务 | 任务开头 |
 
+### Runner 参数与模型配置
+
+`/args ...` 是任务级的 runner 参数透传。ATM 不解析模型或上游配置；当前运行选择 `-tool codex` 时，这些参数追加给 `codex exec --json ... -`；选择 `-tool claude` 或 `-tool claude-code` 时，追加给 `claude`。
+
+更完整的执行顺序和注意事项见 [底层命令参考的 `/args` 小节](../../commands.md#args-)。
+
+```txt
+/args --model gpt-5.5
+用 Codex 指定模型运行当前任务。
+
+/args --model sonnet
+用 Claude Code 指定模型运行当前任务。
+```
+
+Codex 可以透传 `-c key=value` 覆盖配置。自定义上游通常先写到用户级 `~/.codex/config.toml` 的 `[model_providers.<id>]`，再在任务里选择 provider；内置 `openai` provider 的 base URL 可用 `openai_base_url`：
+
+```txt
+/args -c model_provider="proxy" --model gpt-5.5
+通过 Codex 的自定义 provider 运行。
+
+/args -c openai_base_url="https://gateway.example.com/v1" --model gpt-5.5
+通过指定 OpenAI 兼容网关运行。
+```
+
+Claude Code 的上游、鉴权和默认模型通常放在环境变量或 settings 文件中，例如 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`，任务内可透传 `--settings`：
+
+```txt
+/args --settings ./.claude/atm-settings.json --model claude-sonnet-4-6
+通过 Claude Code settings 中的网关配置运行。
+```
+
 ## 模板变量
 
 占位符写法：

@@ -167,6 +167,58 @@ Append CLI arguments to the selected tool for every flow in the current block.
 Run the selected tool with an extra flag.
 ```
 
+ATM does not parse these arguments. It passes them through to the runner selected by `atm run -tool`. Codex tasks are run approximately as `codex exec --json ... <args> -`; Claude Code tasks are run approximately as `claude ... <args> --output-format stream-json --verbose -p <prompt>`. Model, effort, permission mode, profile, and upstream/provider settings therefore follow the selected runner's own CLI and configuration semantics.
+
+Common model overrides:
+
+```txt
+/args --model gpt-5.5
+Run this task with a Codex model override.
+
+/args --model sonnet
+Run this task with a Claude Code model override.
+```
+
+For Codex, temporary config overrides can be passed as `-c key=value`. To use a custom upstream, usually define the provider in the user-level `~/.codex/config.toml` first, then select it from the task; Codex does not allow project-local `.codex/config.toml` files to override provider/auth settings.
+
+```toml
+# ~/.codex/config.toml
+[model_providers.proxy]
+name = "OpenAI-compatible proxy"
+base_url = "https://llm.example.com/v1"
+env_key = "PROXY_API_KEY"
+```
+
+```txt
+/args -c model_provider="proxy" --model gpt-5.5
+Run this task through the Codex proxy provider.
+```
+
+If you only need to override the API base URL for Codex's built-in `openai` provider, use Codex's `openai_base_url` setting in user config, or pass it through for one task:
+
+```txt
+/args -c openai_base_url="https://gateway.example.com/v1" --model gpt-5.5
+Run through the selected OpenAI-compatible gateway.
+```
+
+For Claude Code, upstream routing, auth, and default model are usually configured with environment variables or settings files. Use `--model` for a per-task model override; pass `--settings` when a task should load a specific settings file:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gateway.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "token-from-secret-store"
+  }
+}
+```
+
+```txt
+/args --settings ./.claude/atm-settings.json --model claude-sonnet-4-6
+Run through the gateway configured by Claude Code settings.
+```
+
+Do not use `/args` to override runner arguments that ATM owns, such as Codex's `exec --json` and final stdin `-`, or Claude Code's `--output-format stream-json`, `--verbose`, and `-p`; ATM relies on those arguments to parse structured output and pass the task prompt.
+
 `/args` can also share a line with `/for`:
 
 ```txt
