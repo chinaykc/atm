@@ -212,6 +212,7 @@ func (e *Engine) taskDefMCP(task compiler.Task, dbs []compiler.DBRuntime, skills
 		Tool:        tool,
 		CodexPath:   e.codexPath,
 		ClaudePath:  e.claudePath,
+		Danger:      e.danger,
 		DBs:         slices.Clone(dbs),
 		Skills:      slices.Clone(skills),
 		MCPs:        slices.Clone(mcps),

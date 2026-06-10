@@ -515,6 +515,31 @@ func TestCdCreatesWorkdirAndRunsAgentThere(t *testing.T) {
 	}
 }
 
+func TestCdUsesConfiguredWorkdirRoot(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run", "work")
+	projectDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectDir, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(runDir, "taskdoc.txt")
+	if err := os.WriteFile(file, []byte("/cd --must-exist app\nimplement\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &workdirRunner{}
+	if err := Run(context.Background(), Options{FilePath: file, WorkdirRoot: projectDir, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
+	}
+	workdirs, _ := runner.snapshot()
+	want := filepath.Join(projectDir, "app")
+	if len(workdirs) != 1 || workdirs[0] != want {
+		t.Fatalf("expected runner workdir %q, got %#v", want, workdirs)
+	}
+}
+
 func TestCdMustExistFailsWithoutStartingRunner(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "taskdoc.txt")
@@ -640,6 +665,50 @@ func TestTaskToolConfigPassesSkillsMCPAndDefsToRunner(t *testing.T) {
 	}
 	if got.DefMCP.Workdir != got.Workdir || got.DefMCP.Tool != "codex" || got.DefMCP.CodexPath != "codex-test" {
 		t.Fatalf("def mcp did not inherit task config: %#v", got.DefMCP)
+	}
+}
+
+func TestDefinitionTaskWebhookUsePassesMCPToRunner(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "taskdoc.md")
+	body := strings.Join([]string{
+		"/webhook new alarm provider:dingtalk url:env:DINGTALK_WEBHOOK secret:env:DINGTALK_SECRET",
+		"",
+		"/def scan",
+		"/webhook use alarm",
+		"Call the webhook with ok.",
+		"/return ok",
+		"",
+		"/call scan",
+		"",
+	}, "\n")
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &optionsRunner{}
+	if err := Run(context.Background(), Options{FilePath: file, Runner: runner, Stdout: io.Discard, Stderr: io.Discard, OutputDir: filepath.Join(dir, "out")}); err != nil {
+		t.Fatal(err)
+	}
+	opts := runner.snapshot()
+	if len(opts) != 1 {
+		t.Fatalf("expected one definition task run, got %d", len(opts))
+	}
+	var webhook compiler.MCPRuntime
+	for _, item := range opts[0].MCPs {
+		if item.Name == "atm_webhook" {
+			webhook = item
+			break
+		}
+	}
+	if webhook.Name == "" {
+		t.Fatalf("missing atm_webhook MCP in definition task options: %#v", opts[0].MCPs)
+	}
+	if !slices.Contains(webhook.ApprovedTools, "atm_webhook_alarm") {
+		t.Fatalf("missing approved webhook tool: %#v", webhook.ApprovedTools)
+	}
+	if !strings.Contains(webhook.Config, `"mcp"`) || !strings.Contains(webhook.Config, `"webhook"`) {
+		t.Fatalf("unexpected webhook MCP config: %s", webhook.Config)
 	}
 }
 

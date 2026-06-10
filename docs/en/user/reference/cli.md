@@ -103,6 +103,7 @@ Common options:
 | `-tool codex|claude` | Select runner |
 | `-codex PATH` | Codex executable |
 | `-claude PATH` | Claude executable |
+| `-danger` | Pass the selected runner's dangerous all-permissions flag to every agent invocation: `--dangerously-bypass-approvals-and-sandbox` for Codex, `--dangerously-skip-permissions` for Claude Code |
 | `-jobs N` | Global background concurrency |
 | `-retries N` | Retry transient agent failures; default `3`, `0` disables |
 | `-output DIR`, `-o DIR` | Shared output artifact directory |

@@ -166,7 +166,7 @@ Windows PowerShell：
 ./atm run --tool claude todo.md
 ```
 
-也可以写成 `--tool claude-code`。一次运行可以把多个 ATM 文件排队执行：
+也可以写成 `--tool claude-code`。需要让所选 runner 跳过权限和沙箱确认时，可以加 `--danger`；它会给 Codex 追加 `--dangerously-bypass-approvals-and-sandbox`，给 Claude Code 追加 `--dangerously-skip-permissions`。一次运行可以把多个 ATM 文件排队执行：
 
 ```sh
 ./atm run --jobs 4 todo.md rollout.md followup.md

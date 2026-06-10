@@ -118,7 +118,7 @@ func TestRunSubcommandExecutesPendingTasks(t *testing.T) {
 	t.Setenv("CODEX_LOG", logFile)
 
 	var out strings.Builder
-	if err := Run([]string{"run", file, "-codex", codex, "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
+	if err := Run([]string{"run", file, "-codex", codex, "-danger", "-output", filepath.Join(dir, "out")}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := os.ReadFile(file)
@@ -140,7 +140,7 @@ func TestRunSubcommandExecutesPendingTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(log), "args:exec --json --yolo -") || !strings.Contains(string(log), "hello {{name}}") {
+	if !strings.Contains(string(log), "args:exec --json --dangerously-bypass-approvals-and-sandbox --yolo -") || !strings.Contains(string(log), "hello {{name}}") {
 		t.Fatalf("unexpected codex log:\n%s", log)
 	}
 }
@@ -391,6 +391,51 @@ func TestRunSubcommandInjectsDocumentFlags(t *testing.T) {
 	}
 	if strings.TrimSpace(string(log)) != "hello Ada" {
 		t.Fatalf("unexpected codex log: %q", log)
+	}
+}
+
+func TestRunSubcommandCdUsesStartWorkdir(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	withWorkingDirectory(t, dir)
+	if err := os.MkdirAll(filepath.Join(dir, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "app", "marker.txt"), []byte("from-start-workdir\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "todo.md")
+	pwdFile := filepath.Join(dir, "pwd.log")
+	markerLog := filepath.Join(dir, "marker.log")
+	codex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(file, []byte("/cd --must-exist app\nread marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\npwd > \"$PWD_LOG\"\ncat marker.txt > \"$MARKER_LOG\"\ncat >/dev/null\n"
+	if err := os.WriteFile(codex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PWD_LOG", pwdFile)
+	t.Setenv("MARKER_LOG", markerLog)
+
+	var out strings.Builder
+	if err := Run([]string{"run", file, "-codex", codex}, &out, &out); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out.String())
+	}
+	gotPWD, err := os.ReadFile(pwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(gotPWD)) != filepath.Join(dir, "app") {
+		t.Fatalf("expected /cd to use start workdir, got %q", gotPWD)
+	}
+	gotMarker, err := os.ReadFile(markerLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotMarker) != "from-start-workdir\n" {
+		t.Fatalf("expected marker from start workdir app, got %q", gotMarker)
 	}
 }
 

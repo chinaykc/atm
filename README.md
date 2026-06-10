@@ -166,7 +166,7 @@ Select a runner explicitly:
 ./atm run --tool claude todo.md
 ```
 
-`--tool claude-code` is also accepted. Multiple ATM files can be queued in one run:
+`--tool claude-code` is also accepted. Use `--danger` when the selected runner should skip permission and sandbox prompts; ATM passes `--dangerously-bypass-approvals-and-sandbox` to Codex and `--dangerously-skip-permissions` to Claude Code. Multiple ATM files can be queued in one run:
 
 ```sh
 ./atm run --jobs 4 todo.md rollout.md followup.md

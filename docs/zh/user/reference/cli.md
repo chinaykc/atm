@@ -49,6 +49,7 @@ atm run todo.txt
 | `-tool codex|claude|claude-code` | `codex` | 选择工具适配器 |
 | `-codex PATH` | `codex` | Codex 可执行文件 |
 | `-claude PATH` | `claude` | Claude Code 可执行文件 |
+| `-danger` | `false` | 给每次 agent 调用追加所选 runner 的危险全权限参数：Codex 使用 `--dangerously-bypass-approvals-and-sandbox`，Claude Code 使用 `--dangerously-skip-permissions` |
 | `-messages N` | `1` | 每个分支保留最近 N 条 assistant 消息 |
 | `-retries N` | `3` | 重试临时 agent 失败；`0` 关闭 |
 | `-output DIR` | `~/.atm/runs/<run-id>/outputs` | 输出产物目录 |
@@ -146,7 +147,7 @@ atm serve scan
 atm serve --addr 127.0.0.1:8080
 ```
 
-`serve` 复用 `run` 的工具参数：`-tool`、`-codex`、`-claude`、`-jobs`、`-messages`、`-output`。启动时必须显式传入一个文件，或先用 `atm serve register` 把文件写入注册表；默认写当前项目的 `.atm/api/index.json`，加 `-g` 写全局注册表。`atm serve scan` 是显式的一次性导入动作，只扫描当前项目 `./.atm/api` 并写入注册表，同时跳过生成目录 `runs/` 和 `jobs/`；也可加 `-g` 导入到全局注册表。注册时不指定 `--path` 会使用文件 basename 去掉 todo 后缀后的路径，例如 `create.todo.md` 对应 `/create`。使用 `--path /user/create` 会暴露：
+`serve` 复用 `run` 的工具参数：`-tool`、`-codex`、`-claude`、`-danger`、`-jobs`、`-messages`、`-output`。启动时必须显式传入一个文件，或先用 `atm serve register` 把文件写入注册表；默认写当前项目的 `.atm/api/index.json`，加 `-g` 写全局注册表。`atm serve scan` 是显式的一次性导入动作，只扫描当前项目 `./.atm/api` 并写入注册表，同时跳过生成目录 `runs/` 和 `jobs/`；也可加 `-g` 导入到全局注册表。注册时不指定 `--path` 会使用文件 basename 去掉 todo 后缀后的路径，例如 `create.todo.md` 对应 `/create`。使用 `--path /user/create` 会暴露：
 
 ```txt
 /user/create

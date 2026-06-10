@@ -202,6 +202,7 @@ type RunOptions struct {
 	ResumeSessionID string
 	Fork            bool
 	ForkTarget      string
+	Danger          bool
 	Args            []string
 	Output          *OutputSpec
 	DBs             []DBRuntime
@@ -442,6 +443,7 @@ type DefMCPRuntime struct {
 	Tool        string          `json:"tool"`
 	CodexPath   string          `json:"codex_path,omitempty"`
 	ClaudePath  string          `json:"claude_path,omitempty"`
+	Danger      bool            `json:"danger,omitempty"`
 	Workdir     string          `json:"workdir,omitempty"`
 	DBs         []DBRuntime     `json:"dbs,omitempty"`
 	Skills      []SkillRuntime  `json:"skills,omitempty"`

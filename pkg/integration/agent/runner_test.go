@@ -160,6 +160,17 @@ func TestCodexResumeArgsUseSpecificSession(t *testing.T) {
 	}
 }
 
+func TestCodexDangerArgsBypassApprovalsAndSandbox(t *testing.T) {
+	execArgs := strings.Join(codexArgs(ir.RunOptions{Danger: true}, "", "", "", "", false), "\n")
+	if !strings.Contains(execArgs, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("missing codex danger arg:\n%s", execArgs)
+	}
+	checkArgs := strings.Join(codexCheckArgs(ir.RunOptions{Danger: true}, "/tmp/result.json"), "\n")
+	if !strings.Contains(checkArgs, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("missing codex check danger arg:\n%s", checkArgs)
+	}
+}
+
 func TestCodexForkExecuteMaterializesSessionAndRunsExecResume(t *testing.T) {
 	requireShell(t)
 
@@ -557,6 +568,17 @@ func TestClaudeForkArgsUseSpecificSession(t *testing.T) {
 	args := strings.Join(claudeArgs("prompt", ir.RunOptions{Fork: true, ResumeSessionID: "session_1"}, "", "", "", "", false), "\n")
 	if !strings.Contains(args, "--resume\nsession_1\n--fork-session") {
 		t.Fatalf("unexpected claude fork args:\n%s", args)
+	}
+}
+
+func TestClaudeDangerArgsSkipPermissions(t *testing.T) {
+	execArgs := strings.Join(claudeArgs("prompt", ir.RunOptions{Danger: true}, "", "", "", "", false), "\n")
+	if !strings.Contains(execArgs, "--dangerously-skip-permissions") {
+		t.Fatalf("missing claude danger arg:\n%s", execArgs)
+	}
+	checkArgs := strings.Join(claudeCheckArgs("check prompt", ir.RunOptions{Danger: true}, "/tmp/result.json"), "\n")
+	if !strings.Contains(checkArgs, "--dangerously-skip-permissions") {
+		t.Fatalf("missing claude check danger arg:\n%s", checkArgs)
 	}
 }
 

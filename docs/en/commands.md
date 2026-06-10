@@ -242,7 +242,7 @@ Use `--must-exist` when the task should fail instead of creating a missing direc
 Run the backend checks.
 ```
 
-The path is rendered with task variables, then resolved relative to the current task workdir or the original ATM file directory. The resolved path must stay inside the original ATM file directory. `/cd` affects Codex/Claude, `/bash`, `/let ... /bash`, natural-language `until` checks, and local expression file functions. It does not change where ATM writes result blocks, output artifacts, or DB files.
+The path is rendered with task variables, then resolved relative to the current task workdir or the task execution root. For `atm run` and `atm resume`, that root is the directory where the run was started, even though ATM executes a managed working copy under `~/.atm/runs/<run-id>/work`. The resolved path must stay inside the task execution root. `/cd` affects Codex/Claude, `/bash`, `/let ... /bash`, natural-language `until` checks, and local expression file functions. It does not change where ATM writes result blocks, output artifacts, or DB files.
 
 ### `/let name value`
 

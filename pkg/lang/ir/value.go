@@ -65,6 +65,7 @@ func MergeRunOptions(base, override RunOptions) RunOptions {
 		ResumeSessionID: resumeSessionID,
 		Fork:            base.Fork || override.Fork,
 		ForkTarget:      forkTarget,
+		Danger:          base.Danger || override.Danger,
 		Args:            slices.Concat(base.Args, override.Args),
 		Output:          output,
 		DBs:             slices.Concat(base.DBs, override.DBs),

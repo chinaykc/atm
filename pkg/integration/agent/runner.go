@@ -157,6 +157,9 @@ func (r codexRunner) Check(ctx context.Context, todoPath, prompt, condition stri
 
 func codexArgs(opts ir.RunOptions, resultFile, schemaFile, dbConfigFile, defConfigFile string, readonlyDB bool) []string {
 	args := []string{"exec", "--json"}
+	if opts.Danger {
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	}
 	if opts.Resume {
 		args = append(args, "resume", opts.ResumeSessionID)
 	}
@@ -212,6 +215,9 @@ func codexCheckArgs(opts ir.RunOptions, resultFile string, dbConfigFiles ...stri
 	}
 
 	args := []string{"exec", "--json"}
+	if opts.Danger {
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	}
 	if opts.Resume {
 		args = append(args, "resume", opts.ResumeSessionID)
 	}
@@ -372,6 +378,9 @@ func claudeArgs(prompt string, opts ir.RunOptions, resultFile, schemaFile, dbCon
 	if opts.Fork {
 		args = append(args, "--resume", opts.ResumeSessionID, "--fork-session")
 	}
+	if opts.Danger {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	args = append(args, opts.Args...)
 	if opts.Output != nil && opts.Output.IsStructured() || dbConfigFile != "" || len(opts.MCPs) > 0 || defConfigFile != "" {
 		args = append(args, "--mcp-config", executeMCPConfigJSON(opts.Output, resultFile, schemaFile, dbConfigFile, defConfigFile, opts.MCPs, opts.DefMCP, readonlyDB))
@@ -393,6 +402,9 @@ func claudeCheckArgs(prompt string, opts ir.RunOptions, resultFile string, dbCon
 	}
 	if opts.Fork {
 		args = append(args, "--resume", opts.ResumeSessionID, "--fork-session")
+	}
+	if opts.Danger {
+		args = append(args, "--dangerously-skip-permissions")
 	}
 	args = append(args, opts.Args...)
 	args = append(args, "--mcp-config", checkMCPConfigJSON(resultFile, dbConfigFile))

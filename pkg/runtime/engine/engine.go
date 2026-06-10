@@ -27,12 +27,14 @@ type Options struct {
 	ToolName     string
 	CodexPath    string
 	ClaudePath   string
+	Danger       bool
 	Stdout       io.Writer
 	Stderr       io.Writer
 	MessageLimit int
 	AgentRetries int
 	OutputDir    string
 	TaskDir      string
+	WorkdirRoot  string
 	GlobalJobs   int
 	Vars         map[string]any
 }
@@ -43,39 +45,41 @@ type Result struct {
 }
 
 type Engine struct {
-	filePath   string
-	document   string
-	root       string
-	runner     agent.Runner
-	toolName   string
-	codexPath  string
-	claudePath string
-	stdout     io.Writer
-	stderr     io.Writer
-	outputs    *outputRegistry
-	taskDir    string
-	async      *asyncGroup
-	pools      *poolManager
-	defs       map[string]compiler.Definition
-	defItems   []compiler.Definition
-	dbs        map[string]compiler.DBDecl
-	dbItems    []compiler.DBDecl
-	skills     map[string]compiler.SkillDecl
-	skillItems []compiler.SkillDecl
-	mcps       map[string]compiler.MCPDecl
-	mcpItems   []compiler.MCPDecl
-	webhooks   map[string]compiler.WebhookDecl
-	vars       map[string]any
-	bashVars   map[string]string
-	callSeq    int
-	start      time.Time
-	messages   int
-	retries    int
-	abandoning bool
-	mu         sync.Mutex
-	stateMu    sync.Mutex
-	resultMu   sync.Mutex
-	result     Result
+	filePath    string
+	document    string
+	root        string
+	workdirRoot string
+	runner      agent.Runner
+	toolName    string
+	codexPath   string
+	claudePath  string
+	danger      bool
+	stdout      io.Writer
+	stderr      io.Writer
+	outputs     *outputRegistry
+	taskDir     string
+	async       *asyncGroup
+	pools       *poolManager
+	defs        map[string]compiler.Definition
+	defItems    []compiler.Definition
+	dbs         map[string]compiler.DBDecl
+	dbItems     []compiler.DBDecl
+	skills      map[string]compiler.SkillDecl
+	skillItems  []compiler.SkillDecl
+	mcps        map[string]compiler.MCPDecl
+	mcpItems    []compiler.MCPDecl
+	webhooks    map[string]compiler.WebhookDecl
+	vars        map[string]any
+	bashVars    map[string]string
+	callSeq     int
+	start       time.Time
+	messages    int
+	retries     int
+	abandoning  bool
+	mu          sync.Mutex
+	stateMu     sync.Mutex
+	resultMu    sync.Mutex
+	result      Result
 }
 
 type scopedRuntimeLet struct {
@@ -127,30 +131,39 @@ func New(opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("create task artifact directory: %w", err)
 	}
 	var stdMu sync.Mutex
+	workdirRoot := opts.WorkdirRoot
+	if strings.TrimSpace(workdirRoot) == "" {
+		workdirRoot = filepath.Dir(opts.FilePath)
+	}
+	if abs, err := filepath.Abs(workdirRoot); err == nil {
+		workdirRoot = abs
+	}
 	return &Engine{
-		filePath:   opts.FilePath,
-		document:   opts.FilePath,
-		root:       filepath.Dir(opts.FilePath),
-		runner:     opts.Runner,
-		toolName:   opts.ToolName,
-		codexPath:  opts.CodexPath,
-		claudePath: opts.ClaudePath,
-		stdout:     lockedWriter{w: opts.Stdout, mu: &stdMu},
-		stderr:     lockedWriter{w: opts.Stderr, mu: &stdMu},
-		outputs:    outputs,
-		taskDir:    taskDir,
-		async:      newAsyncGroup(),
-		pools:      newPoolManager(opts.GlobalJobs),
-		defs:       make(map[string]compiler.Definition),
-		dbs:        make(map[string]compiler.DBDecl),
-		skills:     make(map[string]compiler.SkillDecl),
-		mcps:       make(map[string]compiler.MCPDecl),
-		webhooks:   make(map[string]compiler.WebhookDecl),
-		vars:       compiler.CloneVars(opts.Vars),
-		bashVars:   make(map[string]string),
-		start:      time.Now(),
-		messages:   opts.MessageLimit,
-		retries:    opts.AgentRetries,
+		filePath:    opts.FilePath,
+		document:    opts.FilePath,
+		root:        filepath.Dir(opts.FilePath),
+		workdirRoot: workdirRoot,
+		runner:      opts.Runner,
+		toolName:    opts.ToolName,
+		codexPath:   opts.CodexPath,
+		claudePath:  opts.ClaudePath,
+		danger:      opts.Danger,
+		stdout:      lockedWriter{w: opts.Stdout, mu: &stdMu},
+		stderr:      lockedWriter{w: opts.Stderr, mu: &stdMu},
+		outputs:     outputs,
+		taskDir:     taskDir,
+		async:       newAsyncGroup(),
+		pools:       newPoolManager(opts.GlobalJobs),
+		defs:        make(map[string]compiler.Definition),
+		dbs:         make(map[string]compiler.DBDecl),
+		skills:      make(map[string]compiler.SkillDecl),
+		mcps:        make(map[string]compiler.MCPDecl),
+		webhooks:    make(map[string]compiler.WebhookDecl),
+		vars:        compiler.CloneVars(opts.Vars),
+		bashVars:    make(map[string]string),
+		start:       time.Now(),
+		messages:    opts.MessageLimit,
+		retries:     opts.AgentRetries,
 	}, nil
 }
 
@@ -288,7 +301,7 @@ func (e *Engine) Run(ctx context.Context) (runErr error) {
 			return fmt.Errorf("task %d: %w", task.BlockIndex+1, err)
 		}
 		lease := store.NewBlockLease(index, blocks[index].Body)
-		err = e.runTask(ctx, lease, task, compiler.RunOptions{DBs: dbs, Skills: skills, MCPs: mcps, DefMCP: defMCP, DefDepth: 1})
+		err = e.runTask(ctx, lease, task, compiler.RunOptions{Danger: e.danger, DBs: dbs, Skills: skills, MCPs: mcps, DefMCP: defMCP, DefDepth: 1})
 		if errors.Is(err, store.ErrObsolete) {
 			continue
 		}
@@ -951,7 +964,7 @@ func (e *Engine) evaluateIfCondition(ctx context.Context, block compiler.IfBlock
 		return expr.EvalBool(condition, expr.Context{
 			Vars:      globals,
 			TodoFile:  e.filePath,
-			Root:      e.root,
+			Root:      e.workdirRoot,
 			OutputDir: e.outputs.dirPath(),
 		})
 	default:
@@ -959,7 +972,7 @@ func (e *Engine) evaluateIfCondition(ctx context.Context, block compiler.IfBlock
 		if err != nil {
 			return false, fmt.Errorf("prompt template failed: %w", err)
 		}
-		return e.checkAgent(ctx, e.filePath, prompt, condition, compiler.RunOptions{}, e.stdout, e.stderr)
+		return e.checkAgent(ctx, e.filePath, prompt, condition, compiler.RunOptions{Danger: e.danger}, e.stdout, e.stderr)
 	}
 }
 

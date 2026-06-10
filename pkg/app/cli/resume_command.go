@@ -92,6 +92,7 @@ func runResumeCommand(ctx context.Context, cmd *urfavecli.Command, env commandEn
 	if opts.TaskDir == "" {
 		opts.TaskDir = filepath.Join(runDir, "tasks")
 	}
+	opts.WorkdirRoot = manifest.StartWorkdir
 	workspace := &managedRunWorkspace{manifest: manifest, runDir: runDir}
 	for _, entry := range append([]runManifestSource{{
 		SourcePath:    manifest.SourcePath,

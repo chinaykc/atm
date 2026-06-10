@@ -72,6 +72,7 @@ func ServeDefsMCP(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer
 		ToolName:     config.Tool,
 		CodexPath:    config.CodexPath,
 		ClaudePath:   config.ClaudePath,
+		Danger:       config.Danger,
 		Stdout:       io.Discard,
 		Stderr:       stderr,
 		MessageLimit: config.Messages,
@@ -185,6 +186,7 @@ func (s defsMCPServer) callTool(ctx context.Context, toolName string, arguments 
 	value, returned, err := s.engine.ExecuteDefinition(ctx, compiler.Call{Name: name, Args: callArgs}, ExecuteDefinitionOptions{
 		Vars:      s.config.Vars,
 		Workdir:   s.config.Workdir,
+		Danger:    s.config.Danger,
 		DBs:       s.config.DBs,
 		Skills:    s.config.Skills,
 		MCPs:      s.config.MCPs,
@@ -206,6 +208,7 @@ func (s defsMCPServer) toolDefinitionName(tool string) (string, bool) {
 type ExecuteDefinitionOptions struct {
 	Vars      map[string]any
 	Workdir   string
+	Danger    bool
 	DBs       []compiler.DBRuntime
 	Skills    []compiler.SkillRuntime
 	MCPs      []compiler.MCPRuntime
@@ -227,6 +230,7 @@ func (e *Engine) ExecuteDefinition(ctx context.Context, call compiler.Call, opts
 	}
 	baseOptions := compiler.RunOptions{
 		Workdir: opts.Workdir,
+		Danger:  opts.Danger,
 		DBs:     slices.Clone(opts.DBs),
 		Skills:  slices.Clone(opts.Skills),
 		MCPs:    slices.Clone(opts.MCPs),

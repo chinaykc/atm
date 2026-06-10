@@ -28,6 +28,7 @@ func executeFlags() []urfavecli.Flag {
 		&urfavecli.StringFlag{Name: "tool", Value: "codex", Usage: "tool adapter to run: codex, claude, or claude-code"},
 		&urfavecli.StringFlag{Name: "codex", Value: "codex", Usage: "codex executable path used by --tool codex"},
 		&urfavecli.StringFlag{Name: "claude", Value: "claude", Usage: "claude executable path used by --tool claude or --tool claude-code"},
+		&urfavecli.BoolFlag{Name: "danger", Usage: "pass the selected runner's dangerous all-permissions flag to every agent invocation"},
 		&urfavecli.IntFlag{Name: "messages", Value: 1, Usage: "number of recent structured assistant messages to keep in each result block"},
 		&urfavecli.IntFlag{Name: "retries", Value: 3, Usage: "maximum retries for retryable agent errors; use 0 to disable"},
 		&urfavecli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "directory for output artifacts; source backups and result.todo.md stay under ATM_HOME/runs"},
@@ -95,6 +96,7 @@ func runOneFile(ctx context.Context, cmd *urfavecli.Command, env commandEnv, opt
 	opts.FilePath = workspace.manifest.WorkingFile
 	opts.OutputDir = workspace.manifest.OutputDir
 	opts.TaskDir = workspace.manifest.TaskDir
+	opts.WorkdirRoot = workspace.manifest.StartWorkdir
 	runErr := engine.Run(ctx, opts)
 	status := "succeeded"
 	if runErr != nil {
@@ -145,6 +147,7 @@ func executeOptions(cmd *urfavecli.Command, env commandEnv) (engine.Options, err
 		ToolName:     cmd.String("tool"),
 		CodexPath:    cmd.String("codex"),
 		ClaudePath:   cmd.String("claude"),
+		Danger:       cmd.Bool("danger"),
 		Stdout:       env.Stdout,
 		Stderr:       env.Stderr,
 		MessageLimit: messages,

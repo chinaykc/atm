@@ -1059,7 +1059,7 @@ func (x *taskExecution) resolveTaskWorkdir(current execContext, rawPath string) 
 	}
 	base := current.options.Workdir
 	if base == "" {
-		base = x.engine.root
+		base = x.engine.workdirRoot
 	}
 	if !filepath.IsAbs(base) {
 		abs, err := filepath.Abs(base)
@@ -1076,7 +1076,7 @@ func (x *taskExecution) resolveTaskWorkdir(current execContext, rawPath string) 
 	if err != nil {
 		return "", err
 	}
-	root, err := filepath.Abs(filepath.Clean(x.engine.root))
+	root, err := filepath.Abs(filepath.Clean(x.engine.workdirRoot))
 	if err != nil {
 		return "", err
 	}
@@ -1091,7 +1091,7 @@ func (x *taskExecution) evalRoot(current execContext) string {
 	if current.options.Workdir != "" {
 		return current.options.Workdir
 	}
-	return x.engine.root
+	return x.engine.workdirRoot
 }
 
 func (x *taskExecution) renderTemplate(ctx context.Context, current *execContext, input, label string) (string, error) {
@@ -1306,7 +1306,28 @@ func (x *taskExecution) callDefinition(ctx context.Context, current execContext,
 		if err != nil {
 			return nil, false, fmt.Errorf("definition %s block %d: %w", call.Name, i+1, err)
 		}
-		blockCtx.options = ir.MergeRunOptions(base.options, compiler.RunOptions{DBs: blockDBs})
+		blockSkills, err := x.engine.taskSkills(task)
+		if err != nil {
+			return nil, false, fmt.Errorf("definition %s block %d: %w", call.Name, i+1, err)
+		}
+		blockMCPs, err := x.engine.taskMCPs(task)
+		if err != nil {
+			return nil, false, fmt.Errorf("definition %s block %d: %w", call.Name, i+1, err)
+		}
+		webhookMCPs, err := x.engine.taskWebhookMCPs(task)
+		if err != nil {
+			return nil, false, fmt.Errorf("definition %s block %d: %w", call.Name, i+1, err)
+		}
+		blockMCPs = append(blockMCPs, webhookMCPs...)
+		blockOptions := ir.MergeRunOptions(base.options, compiler.RunOptions{DBs: blockDBs, Skills: blockSkills, MCPs: blockMCPs})
+		blockDefMCP, err := x.engine.taskDefMCP(task, blockOptions.DBs, blockOptions.Skills, blockOptions.MCPs)
+		if err != nil {
+			return nil, false, fmt.Errorf("definition %s block %d: %w", call.Name, i+1, err)
+		}
+		if blockDefMCP != nil {
+			blockOptions = ir.MergeRunOptions(blockOptions, compiler.RunOptions{DefMCP: blockDefMCP})
+		}
+		blockCtx.options = blockOptions
 		child := &taskExecution{
 			engine:     x.engine,
 			task:       task,
@@ -1809,6 +1830,7 @@ func renderRunOptions(opts compiler.RunOptions, vars map[string]any) (compiler.R
 		Resume:          opts.Resume,
 		ResumeSessionID: opts.ResumeSessionID,
 		Fork:            opts.Fork,
+		Danger:          opts.Danger,
 		Output:          opts.Output,
 		DBs:             slices.Clone(opts.DBs),
 		Workdir:         opts.Workdir,

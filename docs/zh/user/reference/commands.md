@@ -152,7 +152,7 @@ atm flag list
 在这个目录下实现任务。
 ```
 
-`/cd path` 会在目录不存在时自动创建。需要要求目录必须已存在时，写 `/cd --must-exist path`。解析后的路径必须留在原始 atm 文件所在目录内；`/cd` 会影响 agent、`/bash`、`/let ... /bash` 和 本地表达式文件函数。
+`/cd path` 会在目录不存在时自动创建。需要要求目录必须已存在时，写 `/cd --must-exist path`。在 `atm run` 和 `atm resume` 中，首个相对路径会相对启动运行时所在目录解析，而不是相对 `~/.atm/runs/<run-id>/work` 下的托管工作副本；解析后的路径必须留在任务执行根目录内。`/cd` 会影响 agent、`/bash`、`/let ... /bash` 和本地表达式文件函数。
 
 ### 重试直到完成
 
